@@ -81,7 +81,7 @@ const osThreadAttr_t IMUTask_attributes = {
 osThreadId_t GPSTaskHandle;
 const osThreadAttr_t GPSTask_attributes = {
   .name = "GPSTask",
-  .stack_size = 250 * 4,
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for RFIDTask */
@@ -105,6 +105,11 @@ const osThreadAttr_t ADCProcessingTa_attributes = {
   .stack_size = 250 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for MutexSPI1 */
+osMutexId_t MutexSPI1Handle;
+const osMutexAttr_t MutexSPI1_attributes = {
+  .name = "MutexSPI1"
+};
 /* USER CODE BEGIN PV */
 	//task Handle
 
@@ -119,6 +124,7 @@ const osThreadAttr_t ADCProcessingTa_attributes = {
 	float longitude = 0;
 	char strUTC[8] = {}; // UTC time in the readable hh:mm:ss format
 	uint8_t flag = 0;
+	char GPS_msg[20] ={};
 
 	//ADC Variables
 	float value[3];
@@ -231,6 +237,9 @@ int main(void)
 
   /* Init scheduler */
   osKernelInitialize();
+  /* Create the mutex(es) */
+  /* creation of MutexSPI1 */
+  MutexSPI1Handle = osMutexNew(&MutexSPI1_attributes);
 
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
@@ -262,7 +271,7 @@ int main(void)
   RFIDTaskHandle = osThreadNew(RFID, NULL, &RFIDTask_attributes);
 
   /* creation of SDCardTask */
-  SDCardTaskHandle = osThreadNew(SDCard, NULL, &SDCardTask_attributes);
+//  SDCardTaskHandle = osThreadNew(SDCard, NULL, &SDCardTask_attributes);
 
   /* creation of ADCProcessingTa */
   ADCProcessingTaHandle = osThreadNew(ADCProcesing, NULL, &ADCProcessingTa_attributes);
@@ -646,7 +655,7 @@ void Display(void *argument)
 		  identification = 0;
 	  }
 	  //End of Identification Check
-	  sprintf(txBuffer,"ID : %x-%x-%x-%x\tAx = %.2f Ay = %.2f Az = %.2f Fuel : %.2f\n",
+	  sprintf(txBuffer,"\nID : %x-%x-%x-%x\tAx = %.2f Ay = %.2f Az = %.2f Fuel : %.2f",
 			  UID[0],UID[1],UID[2],UID[3], MPU6050.Ax, MPU6050.Ay,MPU6050.Az,MAFiltFuel.out);
 	  HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
 //	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
@@ -772,7 +781,7 @@ void GPS(void *argument)
 	  			// splitting the good NMEA sentence into the tokens by the comma delimiter
 	  				for (char *pV = strtok(nmeaSnt, ","); pV != NULL; pV = strtok(NULL, ",")) {
 	  					memset(txBuffer,0,sizeof(txBuffer));
-	  					sprintf(txBuffer,"pV[%d] : %s\n",cnt, pV);
+//	  					sprintf(txBuffer,"pV[%d] : %s\n",cnt, pV);
 	  //				HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 100);
 	  					switch (cnt) {
 	  						case 1:
@@ -863,12 +872,16 @@ void GPS(void *argument)
 
 	  				memset(txBuffer,0,sizeof(txBuffer));
 	  				sprintf(txBuffer, "Latitude : %f Longitude : %f UTC : %s\n",latitude,longitude, strUTC);
-	  				HAL_UART_Transmit(&huart2, (unsigned char *)txBuffer, sizeof(txBuffer), 100);
+//	  				HAL_UART_Transmit(&huart2, (unsigned char *)txBuffer, sizeof(txBuffer), 100);
 
 	  			} //end of the chekcsum data verification
 	  		} //end of %GPPGA Sentences selection
 	  	}// end of splotting the buffstr by the "\n" delimiter with strsep() c function
 	  	flag = 0;
+	  }
+	  else {
+		  sprintf(txBuffer," GPS no signal..");
+		  HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer, sizeof(txBuffer), 100);
 	  }
 	  osDelay(500);
   }
@@ -903,6 +916,7 @@ void RFID(void *argument)
   /* Infinite loop */
   for(;;)
   {
+	  osMutexAcquire(MutexSPI1Handle, portMAX_DELAY);
 	  status = MFRC522_Request(PICC_REQIDL, cardstr);
 	  if(status == MI_OK){
 		  sprintf(txBuffer,"Card detected ..\n");
@@ -929,6 +943,7 @@ void RFID(void *argument)
 		  //		  sprintf(txBuffer,"Finding ..\n");
 //		  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
 	  }
+	  osMutexRelease(MutexSPI1Handle);
     osDelay(100);
   }
   /* USER CODE END RFID */
