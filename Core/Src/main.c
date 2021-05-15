@@ -20,6 +20,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "cmsis_os.h"
+#include "fatfs.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -31,6 +32,7 @@
 #include "integer_type.h"
 #include <math.h>
 #include "RCFilter.h"
+#include <stdarg.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -104,25 +106,30 @@ const osThreadAttr_t ADCProcessingTa_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* USER CODE BEGIN PV */
-//task Handle
+	//task Handle
 
-//IMU Variable
-MPU6050_t MPU6050;
+	//IMU Variable
+	MPU6050_t MPU6050;
 
-//RFID Variable
-uint8_t UID[4]={};
+	//RFID Variable
+	uint8_t UID[4]={};
 
-//GPS Variable
-float latitude = 0;
-float longitude = 0;
-char strUTC[8] = {}; // UTC time in the readable hh:mm:ss format
-uint8_t flag = 0;
+	//GPS Variable
+	float latitude = 0;
+	float longitude = 0;
+	char strUTC[8] = {}; // UTC time in the readable hh:mm:ss format
+	uint8_t flag = 0;
 
-//ADC Variables
-float value[3];
-uint32_t buffer[3];
-RCFilter rcFiltFuel, rcFiltAccu, rcFiltBatt;
-MovAvgFilter MAFiltFuel;
+	//ADC Variables
+	float value[3];
+	uint32_t buffer[3];
+	RCFilter rcFiltFuel, rcFiltAccu, rcFiltBatt;
+	MovAvgFilter MAFiltFuel;
+
+	//SD Card Variables
+	FATFS FatFs; 	//Fatfs handle
+	FIL fil; 		//File handle
+	FRESULT fres; 	//Result after operations
 
 /* USER CODE END PV */
 
@@ -161,6 +168,18 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 	  value[i] = buffer[i];
   }
   //Filtering Analog reading
+}
+
+void myprintf(const char *fmt, ...) {
+  static char buffer[256];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buffer, sizeof(buffer), fmt, args);
+  va_end(args);
+
+  int len = strlen(buffer);
+  HAL_UART_Transmit(&huart2, (uint8_t*)buffer, len, -1);
+
 }
 /* USER CODE END PFP */
 
@@ -203,6 +222,7 @@ int main(void)
   MX_SPI1_Init();
   MX_USART1_UART_Init();
   MX_ADC1_Init();
+  MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
   char txBuffer [100] = {};
   sprintf(txBuffer, "Bismillah..\n");
@@ -236,13 +256,13 @@ int main(void)
   IMUTaskHandle = osThreadNew(IMU, NULL, &IMUTask_attributes);
 
   /* creation of GPSTask */
-//  GPSTaskHandle = osThreadNew(GPS, NULL, &GPSTask_attributes);
+  GPSTaskHandle = osThreadNew(GPS, NULL, &GPSTask_attributes);
 
   /* creation of RFIDTask */
   RFIDTaskHandle = osThreadNew(RFID, NULL, &RFIDTask_attributes);
 
   /* creation of SDCardTask */
-//  SDCardTaskHandle = osThreadNew(SDCard, NULL, &SDCardTask_attributes);
+  SDCardTaskHandle = osThreadNew(SDCard, NULL, &SDCardTask_attributes);
 
   /* creation of ADCProcessingTa */
   ADCProcessingTaHandle = osThreadNew(ADCProcesing, NULL, &ADCProcessingTa_attributes);
@@ -440,7 +460,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_128;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -559,7 +579,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, RFID_RST_Pin|RFID_CS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, SDCARD_CS_Pin|POWER_SEL_Pin|IGNITION_LOGIC_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, SD_CS_Pin|POWER_SEL_Pin|IGNITION_LOGIC_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -574,8 +594,8 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SDCARD_CS_Pin POWER_SEL_Pin IGNITION_LOGIC_Pin */
-  GPIO_InitStruct.Pin = SDCARD_CS_Pin|POWER_SEL_Pin|IGNITION_LOGIC_Pin;
+  /*Configure GPIO pins : SD_CS_Pin POWER_SEL_Pin IGNITION_LOGIC_Pin */
+  GPIO_InitStruct.Pin = SD_CS_Pin|POWER_SEL_Pin|IGNITION_LOGIC_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -887,7 +907,7 @@ void RFID(void *argument)
 	  if(status == MI_OK){
 		  sprintf(txBuffer,"Card detected ..\n");
 		  HAL_UART_Transmit(&huart2, (unsigned char*) txBuffer, sizeof(txBuffer), 500);
-		  sprintf(txBuffer,"Card Type : %x %x %x\n", cardstr[0],cardstr[1],cardstr[2]);
+//		  sprintf(txBuffer,"Card Type : %x %x %x\n", cardstr[0],cardstr[1],cardstr[2]);
 //		  HAL_UART_Transmit(&huart2, (unsigned char*) txBuffer, sizeof(txBuffer), 500);
 		  memset(txBuffer,0,sizeof(txBuffer));
 
@@ -898,7 +918,7 @@ void RFID(void *argument)
 			  for(int i = 0; i <4 ;i++){
 				  UID[i]=cardstr[i];
 			  }
-			  sprintf(txBuffer,"UID: %x %x %x %x\n\r",(u_char)cardstr[0], (u_char)cardstr[1],(u_char)cardstr[2],(u_char)cardstr[3]);
+//			  sprintf(txBuffer,"UID: %x %x %x %x\n\r",(u_char)cardstr[0], (u_char)cardstr[1],(u_char)cardstr[2],(u_char)cardstr[3]);
 //			  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
 		  }
 	  }
@@ -924,6 +944,76 @@ void RFID(void *argument)
 void SDCard(void *argument)
 {
   /* USER CODE BEGIN SDCard */
+	//Open the file system
+	fres = f_mount(&FatFs, "", 1); //1=mount now
+	if (fres != FR_OK) {
+		myprintf("f_mount error (%i)\r\n", fres);
+		while(1);
+	}
+	//Let's get some statistics from the SD card
+	DWORD free_clusters, free_sectors, total_sectors;
+    FATFS* getFreeFs;
+
+    fres = f_getfree("", &free_clusters, &getFreeFs);
+    if (fres != FR_OK) {
+  	myprintf("f_getfree error (%i)\r\n", fres);
+  	while(1);
+    }
+
+    //Formula comes from ChaN's documentation
+    total_sectors = (getFreeFs->n_fatent - 2) * getFreeFs->csize;
+    free_sectors = free_clusters * getFreeFs->csize;
+
+    myprintf("SD card stats:\r\n%10lu KiB total drive space.\r\n%10lu KiB available.\r\n", total_sectors / 2, free_sectors / 2);
+
+    //Now let's try to open file "test.txt"
+    fres = f_open(&fil, "tesjson.txt", FA_READ);
+    if (fres != FR_OK) {
+  	myprintf("f_open error (%i)\r\n");
+  	while(1);
+    }
+    myprintf("I was able to open 'tesjson.txt' for reading!\r\n");
+
+    //Read 30 bytes from "test.txt" on the SD card
+    BYTE readBuf[100];
+
+    //We can either use f_read OR f_gets to get data out of files
+    //f_gets is a wrapper on f_read that does some string formatting for us
+    TCHAR* rres = f_gets((TCHAR*)readBuf, 100, &fil);
+    if(rres != 0) {
+  	myprintf("Read string from 'tesjson.txt'' contents: %s\r\n", readBuf);
+    } else {
+  	myprintf("f_gets error (%i)\r\n", fres);
+    }
+
+    //Be a tidy kiwi - don't forget to close your file!
+    f_close(&fil);
+
+    //Now let's try and write a file "write.txt"
+    fres = f_open(&fil, "write.txt", FA_WRITE | FA_OPEN_ALWAYS | FA_CREATE_ALWAYS);
+    if(fres == FR_OK) {
+    	myprintf("I was able to open 'write.txt' for writing\r\n");
+    } else {
+    	myprintf("f_open error (%i)\r\n", fres);
+    }
+
+    //Copy in a string
+//    strncpy((char*)readBuf, "a new file is made!", 19);
+    char* kirimjson = "{'Lokasi':'-6.914744,107.609810','Time_Stamp':'27 April 2021, 20:22'}" ;
+    uint32_t length_var = strlen(kirimjson);
+    strncpy((char*)readBuf, kirimjson, length_var);
+    UINT bytesWrote;
+    fres = f_write(&fil, readBuf, length_var, &bytesWrote);
+    if(fres == FR_OK) {
+    	myprintf("Wrote %i bytes to 'write.txt'!\r\n", bytesWrote);
+    } else {
+    	myprintf("f_write error (%i)\r\n");
+    }
+    //Be a tidy kiwi - don't forget to close your file!
+    f_close(&fil);
+//    f_unlink("/write.txt"); Buat ngedelete file
+    //We're done, so de-mount the drive
+    f_mount(NULL, "", 0);
   /* Infinite loop */
   for(;;)
   {

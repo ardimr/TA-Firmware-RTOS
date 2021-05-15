@@ -44,6 +44,11 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Middlewares/Third_Party/FreeRTOS/Source/include/task.h \
  ../Middlewares/Third_Party/FreeRTOS/Source/include/list.h \
  ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.h \
+ ../FATFS/App/fatfs.h ../Middlewares/Third_Party/FatFs/src/ff.h \
+ ../Middlewares/Third_Party/FatFs/src/integer.h ../FATFS/Target/ffconf.h \
+ ../Middlewares/Third_Party/FatFs/src/ff_gen_drv.h \
+ ../Middlewares/Third_Party/FatFs/src/diskio.h \
+ ../Middlewares/Third_Party/FatFs/src/ff.h ../FATFS/Target/user_diskio.h \
  ../Core/Inc/mpu6050.h ../Core/Inc/MFRC522.h ../Core/Inc/main.h \
  ../Core/Inc/integer_type.h ../Core/Inc/integer_type.h \
  ../Core/Inc/RCFilter.h
@@ -139,6 +144,22 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Middlewares/Third_Party/FreeRTOS/Source/include/list.h:
 
 ../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.h:
+
+../FATFS/App/fatfs.h:
+
+../Middlewares/Third_Party/FatFs/src/ff.h:
+
+../Middlewares/Third_Party/FatFs/src/integer.h:
+
+../FATFS/Target/ffconf.h:
+
+../Middlewares/Third_Party/FatFs/src/ff_gen_drv.h:
+
+../Middlewares/Third_Party/FatFs/src/diskio.h:
+
+../Middlewares/Third_Party/FatFs/src/ff.h:
+
+../FATFS/Target/user_diskio.h:
 
 ../Core/Inc/mpu6050.h:
 

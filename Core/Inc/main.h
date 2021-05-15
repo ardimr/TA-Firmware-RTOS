@@ -68,8 +68,8 @@ void Error_Handler(void);
 #define USART_RX_GPIO_Port GPIOA
 #define RFID_CS_Pin GPIO_PIN_4
 #define RFID_CS_GPIO_Port GPIOA
-#define SDCARD_CS_Pin GPIO_PIN_4
-#define SDCARD_CS_GPIO_Port GPIOC
+#define SD_CS_Pin GPIO_PIN_4
+#define SD_CS_GPIO_Port GPIOC
 #define BATT_LEVEL_Pin GPIO_PIN_5
 #define BATT_LEVEL_GPIO_Port GPIOC
 #define ACCU_LEVEL_Pin GPIO_PIN_0
@@ -91,7 +91,7 @@ void Error_Handler(void);
 #define SWO_Pin GPIO_PIN_3
 #define SWO_GPIO_Port GPIOB
 /* USER CODE BEGIN Private defines */
-
+#define SD_SPI_HANDLE hspi1
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
