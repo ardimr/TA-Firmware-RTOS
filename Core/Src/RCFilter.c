@@ -24,3 +24,29 @@ float RCFilter_Update(RCFilter *filter, float input){
 	/* Return Filtered sample */
 	return filter->out[0];
 }
+
+void MovAvgFilter_init(MovAvgFilter * filter){
+	/*Clear output buffer*/
+	filter->out = 0.0f;
+	/*clear value*/
+	for (int i = 0; i<BUFF_LENGTH; i++){
+		filter -> val[i]= 0;
+	}
+}
+
+float MovAvgFilter_Update(MovAvgFilter *filter, float input){
+	/*Shifting Value and calculate the cumulative sum*/
+	float sum = 0;
+	for (int i = 0; i < BUFF_LENGTH; i++){
+		filter->val[i] = filter-> val[i+1];
+		sum += filter -> val[i];
+	}
+	(filter -> val[BUFF_LENGTH-1]) = input;
+	sum += input;
+
+	/*Calculating the average*/
+	float avg = sum/BUFF_LENGTH;
+	filter -> out = avg;
+
+	return filter -> out;
+}

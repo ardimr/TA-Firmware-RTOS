@@ -122,6 +122,7 @@ uint8_t flag = 0;
 float value[3];
 uint32_t buffer[3];
 RCFilter rcFiltFuel, rcFiltAccu, rcFiltBatt;
+MovAvgFilter MAFiltFuel;
 
 /* USER CODE END PV */
 
@@ -626,7 +627,7 @@ void Display(void *argument)
 	  }
 	  //End of Identification Check
 	  sprintf(txBuffer,"ID : %x-%x-%x-%x\tAx = %.2f Ay = %.2f Az = %.2f Fuel : %.2f\n",
-			  UID[0],UID[1],UID[2],UID[3], MPU6050.Ax, MPU6050.Ay,MPU6050.Az,rcFiltFuel.out[0]);
+			  UID[0],UID[1],UID[2],UID[3], MPU6050.Ax, MPU6050.Ay,MPU6050.Az,MAFiltFuel.out);
 	  HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
 //	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
     osDelay(10);
@@ -652,6 +653,7 @@ void IMU(void *argument)
 	HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
 	//Clearing Buffer
 	memset(txBuffer,0,sizeof(txBuffer));
+	osDelay(200);
   /* Infinite loop */
   for(;;)
   {
@@ -867,6 +869,7 @@ void RFID(void *argument)
 	u_char status, checksum1, cardstr[MAX_LEN];
 	MFRC522_Init();
 	status = 0;
+
 	while (status == 0){
 		status = Read_MFRC522(VersionReg);
 		sprintf(txBuffer,"Running RC522 ver :%x\n", status);
@@ -876,7 +879,7 @@ void RFID(void *argument)
 	//Printing to PC
 	memset(txBuffer,0,sizeof(txBuffer));
 	status = 0;
-	osDelay(100);
+	osDelay(200);
   /* Infinite loop */
   for(;;)
   {
@@ -945,6 +948,9 @@ void ADCProcesing(void *argument)
 	HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), HAL_MAX_DELAY);
 	/* Initialize RC Filter */
 	RCFilter_Init(&rcFiltFuel, 5.0f, 100.0f);
+
+	/*Initialize Moving Average Filter*/
+	MovAvgFilter_init(&MAFiltFuel);
 	/* Start ADC */
 	HAL_ADC_Start_DMA(&hadc1, buffer, 3);
 	sprintf(txBuffer,"ADC Intialization Success..\n");
@@ -952,8 +958,9 @@ void ADCProcesing(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	  float input = (value[0]/ADC_RESOLUTION);
+	  float input = (value[1]/ADC_RESOLUTION) * VOLTAGE_REFERENCE;
 	  RCFilter_Update(&rcFiltFuel, input);
+	  MovAvgFilter_Update(&MAFiltFuel, input);
 //	  sprintf(txBuffer,"Raw : %.3f Filtered : %.3f\n", input, rcFiltFuel.out[0]);
 //	  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), HAL_MAX_DELAY);
 	  osDelay(100); //100 Hz Sampling Rate
