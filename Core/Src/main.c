@@ -114,6 +114,13 @@ const osThreadAttr_t PowerManagement_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+/* Definitions for IgnitionTask */
+osThreadId_t IgnitionTaskHandle;
+const osThreadAttr_t IgnitionTask_attributes = {
+  .name = "IgnitionTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
 /* Definitions for MutexSPI1 */
 osMutexId_t MutexSPI1Handle;
 const osMutexAttr_t MutexSPI1_attributes = {
@@ -127,6 +134,8 @@ const osMutexAttr_t MutexSPI1_attributes = {
 
 	//RFID Variable
 	uint8_t UID[4]={};
+	uint8_t identification = 0;
+
 
 	//GPS Variable
 	float latitude = 0;
@@ -146,6 +155,15 @@ const osMutexAttr_t MutexSPI1_attributes = {
 	FIL fil; 		//File handle
 	FRESULT fres; 	//Result after operations
 
+	//Ignition Variables
+	uint8_t ignition_status = 0;
+	uint8_t ignition_logic = 0;
+
+	//Power Variables
+	uint8_t power_sel = 0; //accu usage
+	uint8_t charging = 0;
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -164,6 +182,7 @@ void RFID(void *argument);
 void SDCard(void *argument);
 void ADCProcesing(void *argument);
 void PowManagement(void *argument);
+void Ignition(void *argument);
 
 /* USER CODE BEGIN PFP */
 // function to calculate checksum of the NMEA sentence
@@ -288,6 +307,9 @@ int main(void)
 
   /* creation of PowerManagement */
   PowerManagementHandle = osThreadNew(PowManagement, NULL, &PowerManagement_attributes);
+
+  /* creation of IgnitionTask */
+  IgnitionTaskHandle = osThreadNew(Ignition, NULL, &IgnitionTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -654,11 +676,10 @@ void MainProcess(void *argument)
 	char txBuffer [200] = {};
 	sprintf(txBuffer, "Running Display Task..\n");
   /* Infinite loop */
-	uint8_t identification = 0;
   for(;;)
   {
 	  //Identification Check
-	  if (identification == 1){
+	  if ((identification == 1)&&(ignition_status == 1)){
 		  xTaskNotifyGive(IMUTaskHandle);
 	  }
 
@@ -668,8 +689,8 @@ void MainProcess(void *argument)
 		  identification = 0;
 	  }
 	  //End of Identification Check
-	  sprintf(txBuffer,"\nID : %x-%x-%x-%x\tAx = %.2f Ay = %.2f Az = %.2f Fuel : %.2f",
-			  UID[0],UID[1],UID[2],UID[3], MPU6050.Ax, MPU6050.Ay,MPU6050.Az,MAFiltFuel.out);
+	  sprintf(txBuffer,"\nID : %x-%x-%x-%x Ignition : %d SEL : %d CHRG : %d Ax = %.2f Ay = %.2f Az = %.2f Fuel : %.2f Accu : %.2f Batt : %.2f ",
+			  UID[0],UID[1],UID[2],UID[3], ignition_status, power_sel, charging, MPU6050.Ax, MPU6050.Ay,MPU6050.Az,MAFiltFuel.out, MAFiltAccu.out, MAFiltBatt.out);
 	  HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
 //	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
     osDelay(10);
@@ -912,7 +933,8 @@ void RFID(void *argument)
 {
   /* USER CODE BEGIN RFID */
 	char txBuffer [100] ={};
-	u_char status, checksum1, cardstr[MAX_LEN];
+	u_char status, cardstr[MAX_LEN];
+//	u_char checksum
 	MFRC522_Init();
 	status = 0;
 
@@ -941,7 +963,7 @@ void RFID(void *argument)
 		  //Anti-collision, return card serial number == 4 bytes
 		  status = MFRC522_Anticoll(cardstr);
 		  if (status == MI_OK){
-			  checksum1 = cardstr[0] ^ cardstr[1] ^ cardstr[2] ^ cardstr[3];
+//			  checksum1 = cardstr[0] ^ cardstr[1] ^ cardstr[2] ^ cardstr[3];
 			  for(int i = 0; i <4 ;i++){
 				  UID[i]=cardstr[i];
 			  }
@@ -1064,11 +1086,17 @@ void ADCProcesing(void *argument)
 	HAL_ADC_Start_DMA(&hadc1, buffer, 3);
 	sprintf(txBuffer,"ADC Intialization..\n");
 	HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), HAL_MAX_DELAY);
+
+	/* Initialize Input Value */
+	float input_fuel, input_accu, input_batt = 0;
+
 	/* Initialize RC Filter */
 	RCFilter_Init(&rcFiltFuel, 5.0f, 100.0f);
 
 	/*Initialize Moving Average Filter*/
 	MovAvgFilter_init(&MAFiltFuel);
+	MovAvgFilter_init(&MAFiltAccu);
+	MovAvgFilter_init(&MAFiltBatt);
 	/* Start ADC */
 	HAL_ADC_Start_DMA(&hadc1, buffer, 3);
 	sprintf(txBuffer,"ADC Intialization Success..\n");
@@ -1076,9 +1104,14 @@ void ADCProcesing(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	  float input = (value[1]/ADC_RESOLUTION) * VOLTAGE_REFERENCE;
-	  RCFilter_Update(&rcFiltFuel, input);
-	  MovAvgFilter_Update(&MAFiltFuel, input);
+	  input_accu = (value[0]/ADC_RESOLUTION) * 12;
+	  input_batt = (value[1]/ADC_RESOLUTION) * 4.2;
+	  input_fuel = (value[2]/ADC_RESOLUTION) * VOLTAGE_REFERENCE;
+
+	  RCFilter_Update(&rcFiltFuel, input_fuel);
+	  MovAvgFilter_Update(&MAFiltFuel, input_fuel);
+	  MovAvgFilter_Update(&MAFiltAccu, input_accu);
+	  MovAvgFilter_Update(&MAFiltBatt, input_batt);
 //	  sprintf(txBuffer,"Raw : %.3f Filtered : %.3f\n", input, rcFiltFuel.out[0]);
 //	  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), HAL_MAX_DELAY);
 	  osDelay(100); //100 Hz Sampling Rate
@@ -1105,9 +1138,11 @@ void PowManagement(void *argument)
 	  if(MAFiltAccu.out < ACCU_THRESHOLD) {
 		  //Change Power Source to Battery
 		  //Set Power Selector Pin Output HIGH
+		  power_sel = 1;
 		  HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_SET);
 	  }
 	  else {
+		  power_sel = 0;
 		  HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_RESET);
 	  }
 
@@ -1115,15 +1150,46 @@ void PowManagement(void *argument)
 	  if (MAFiltBatt.out < BATT_THRESHOLD){
 		  //Battery Low, need to charge battery
 		  //Set Charging Signal High
+		  charging = 1;
 		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
 	  }
 	  else {
 		  // No Battery Charging
+		  charging = 0;
 		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
 	  }
     osDelay(100);
   }
   /* USER CODE END PowManagement */
+}
+
+/* USER CODE BEGIN Header_Ignition */
+/**
+* @brief Function implementing the IgnitionTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_Ignition */
+void Ignition(void *argument)
+{
+  /* USER CODE BEGIN Ignition */
+  /* Infinite loop */
+  for(;;)
+  {
+	/* Setting Ignition Switch Logic*/
+	if(identification == 1){
+		//Set Ignition Logic
+		HAL_GPIO_WritePin(IGNITION_LOGIC_GPIO_Port, IGNITION_LOGIC_Pin, GPIO_PIN_SET);
+	}
+	else {
+		HAL_GPIO_WritePin(IGNITION_LOGIC_GPIO_Port, IGNITION_LOGIC_Pin, GPIO_PIN_RESET);
+	}
+
+	/* Reading Ignition Switch Signal */
+	ignition_status = HAL_GPIO_ReadPin(IGNITION_SIGNAL_GPIO_Port, IGNITION_SIGNAL_Pin);
+    osDelay(200);
+  }
+  /* USER CODE END Ignition */
 }
 
  /**
