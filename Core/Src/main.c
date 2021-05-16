@@ -682,7 +682,6 @@ void MainProcess(void *argument)
 	  if ((identification == 1)&&(ignition_status == 1)){
 		  xTaskNotifyGive(IMUTaskHandle);
 	  }
-
 	  if(UID[0]== 0x29){ // Need to add driver database
 		  identification = 1;
 	  } else {
@@ -1104,7 +1103,7 @@ void ADCProcesing(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	  input_accu = (value[0]/ADC_RESOLUTION) * 12;
+	  input_accu = (value[0]/ADC_RESOLUTION) * 13;
 	  input_batt = (value[1]/ADC_RESOLUTION) * 4.2;
 	  input_fuel = (value[2]/ADC_RESOLUTION) * VOLTAGE_REFERENCE;
 
@@ -1134,29 +1133,27 @@ void PowManagement(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	  /* Check Accu Level */
-	  if(MAFiltAccu.out < ACCU_THRESHOLD) {
-		  //Change Power Source to Battery
-		  //Set Power Selector Pin Output HIGH
+	  /**/
+	  if(ignition_status == 0){
+		  //Use Battery
 		  power_sel = 1;
 		  HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_SET);
 	  }
-	  else {
+	  else{ //Ignition On
+		  //Always use Accu
 		  power_sel = 0;
 		  HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_RESET);
-	  }
-
-	  /* Check Battery Level*/
-	  if (MAFiltBatt.out < BATT_THRESHOLD){
-		  //Battery Low, need to charge battery
-		  //Set Charging Signal High
-		  charging = 1;
-		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
-	  }
-	  else {
-		  // No Battery Charging
-		  charging = 0;
-		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
+		  /* Check Accu Level */
+		  	  if((MAFiltAccu.out > ACCU_THRESHOLD)&&(MAFiltBatt.out < BATT_THRESHOLD)) {
+		  		  //Start Charging
+		  		  //Set Charging Signal High
+		  		  charging = 1;
+		  		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
+		  	  }
+		  	  else { // No charging
+		  		  charging = 0;
+		  		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
+		  	  }
 	  }
     osDelay(100);
   }
