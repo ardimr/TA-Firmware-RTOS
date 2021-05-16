@@ -44,6 +44,8 @@
 /* USER CODE BEGIN PD */
 #define ADC_RESOLUTION 4096
 #define VOLTAGE_REFERENCE 3.3
+#define ACCU_THRESHOLD 12
+#define BATT_THRESHOLD 3.7
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -63,10 +65,10 @@ UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 DMA_HandleTypeDef hdma_usart1_rx;
 
-/* Definitions for DisplayTask */
-osThreadId_t DisplayTaskHandle;
-const osThreadAttr_t DisplayTask_attributes = {
-  .name = "DisplayTask",
+/* Definitions for MainProcessTask */
+osThreadId_t MainProcessTaskHandle;
+const osThreadAttr_t MainProcessTask_attributes = {
+  .name = "MainProcessTask",
   .stack_size = 400 * 4,
   .priority = (osPriority_t) osPriorityNormal1,
 };
@@ -105,6 +107,13 @@ const osThreadAttr_t ADCProcessingTa_attributes = {
   .stack_size = 250 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
+/* Definitions for PowerManagement */
+osThreadId_t PowerManagementHandle;
+const osThreadAttr_t PowerManagement_attributes = {
+  .name = "PowerManagement",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
 /* Definitions for MutexSPI1 */
 osMutexId_t MutexSPI1Handle;
 const osMutexAttr_t MutexSPI1_attributes = {
@@ -130,7 +139,7 @@ const osMutexAttr_t MutexSPI1_attributes = {
 	float value[3];
 	uint32_t buffer[3];
 	RCFilter rcFiltFuel, rcFiltAccu, rcFiltBatt;
-	MovAvgFilter MAFiltFuel;
+	MovAvgFilter MAFiltFuel, MAFiltAccu, MAFiltBatt;
 
 	//SD Card Variables
 	FATFS FatFs; 	//Fatfs handle
@@ -148,12 +157,13 @@ static void MX_I2C1_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_ADC1_Init(void);
-void Display(void *argument);
+void MainProcess(void *argument);
 void IMU(void *argument);
 void GPS(void *argument);
 void RFID(void *argument);
 void SDCard(void *argument);
 void ADCProcesing(void *argument);
+void PowManagement(void *argument);
 
 /* USER CODE BEGIN PFP */
 // function to calculate checksum of the NMEA sentence
@@ -258,8 +268,8 @@ int main(void)
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
-  /* creation of DisplayTask */
-  DisplayTaskHandle = osThreadNew(Display, NULL, &DisplayTask_attributes);
+  /* creation of MainProcessTask */
+  MainProcessTaskHandle = osThreadNew(MainProcess, NULL, &MainProcessTask_attributes);
 
   /* creation of IMUTask */
   IMUTaskHandle = osThreadNew(IMU, NULL, &IMUTask_attributes);
@@ -271,10 +281,13 @@ int main(void)
   RFIDTaskHandle = osThreadNew(RFID, NULL, &RFIDTask_attributes);
 
   /* creation of SDCardTask */
-//  SDCardTaskHandle = osThreadNew(SDCard, NULL, &SDCardTask_attributes);
+  SDCardTaskHandle = osThreadNew(SDCard, NULL, &SDCardTask_attributes);
 
   /* creation of ADCProcessingTa */
   ADCProcessingTaHandle = osThreadNew(ADCProcesing, NULL, &ADCProcessingTa_attributes);
+
+  /* creation of PowerManagement */
+  PowerManagementHandle = osThreadNew(PowManagement, NULL, &PowerManagement_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -628,14 +641,14 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE END 4 */
 
-/* USER CODE BEGIN Header_Display */
+/* USER CODE BEGIN Header_MainProcess */
 /**
-  * @brief  Function implementing the DisplayTask thread.
+  * @brief  Function implementing the MainProcessTask thread.
   * @param  argument: Not used
   * @retval None
   */
-/* USER CODE END Header_Display */
-void Display(void *argument)
+/* USER CODE END Header_MainProcess */
+void MainProcess(void *argument)
 {
   /* USER CODE BEGIN 5 */
 	char txBuffer [200] = {};
@@ -1071,6 +1084,46 @@ void ADCProcesing(void *argument)
 	  osDelay(100); //100 Hz Sampling Rate
   }
   /* USER CODE END ADCProcesing */
+}
+
+/* USER CODE BEGIN Header_PowManagement */
+/**
+* @brief Function implementing the PowerManagement thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_PowManagement */
+void PowManagement(void *argument)
+{
+  /* USER CODE BEGIN PowManagement */
+	HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
+  /* Infinite loop */
+  for(;;)
+  {
+	  /* Check Accu Level */
+	  if(MAFiltAccu.out < ACCU_THRESHOLD) {
+		  //Change Power Source to Battery
+		  //Set Power Selector Pin Output HIGH
+		  HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_SET);
+	  }
+	  else {
+		  HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_RESET);
+	  }
+
+	  /* Check Battery Level*/
+	  if (MAFiltBatt.out < BATT_THRESHOLD){
+		  //Battery Low, need to charge battery
+		  //Set Charging Signal High
+		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
+	  }
+	  else {
+		  // No Battery Charging
+		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
+	  }
+    osDelay(100);
+  }
+  /* USER CODE END PowManagement */
 }
 
  /**
