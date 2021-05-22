@@ -142,6 +142,18 @@ void MPU6050_Read_Accel(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStruct) {
 }
 
 
+float CalSpeed(MPU6050_t DataStruct, uint16_t IMU_TS){
+	//Speed calculation
+	float speed[3] = {0,0,0};
+	float speed_result;
+	speed[0] = speed[0] + DataStruct.Ax * IMU_TS * 0.001; //Vx TS in MS
+	speed[1] = speed[1] + DataStruct.Ay * IMU_TS * 0.001; //Vy
+	speed[2] = speed[2] + (DataStruct.Az - 5.52) * IMU_TS * 0.001; //Vz
+	speed_result = sqrt(pow(speed[0],2) + pow(speed[1],2) + pow(speed[2],2));
+
+	return speed_result;
+
+}
 //void MPU6050_Read_Gyro(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStruct) {
 //    uint8_t Rec_Data[6];
 //

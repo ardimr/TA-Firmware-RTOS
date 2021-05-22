@@ -46,6 +46,9 @@
 #define VOLTAGE_REFERENCE 3.3
 #define ACCU_THRESHOLD 12
 #define BATT_THRESHOLD 3.7
+
+#define IMU_TS 50
+#define GPS_TS 500
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -131,6 +134,7 @@ const osMutexAttr_t MutexSPI1_attributes = {
 
 	//IMU Variable
 	MPU6050_t MPU6050;
+	float speed;
 
 	//RFID Variable
 	uint8_t UID[4]={};
@@ -138,11 +142,13 @@ const osMutexAttr_t MutexSPI1_attributes = {
 
 
 	//GPS Variable
-	float latitude = 0;
-	float longitude = 0;
+	double latitude, prev_latitude = 0;
+	double longitude, prev_longitude = 0;
 	char strUTC[8] = {}; // UTC time in the readable hh:mm:ss format
 	uint8_t flag = 0;
 	char GPS_msg[20] ={};
+	double GPS_distance;
+	double GPS_speed;
 
 	//ADC Variables
 	float value[3];
@@ -215,6 +221,40 @@ void myprintf(const char *fmt, ...) {
   int len = strlen(buffer);
   HAL_UART_Transmit(&huart2, (uint8_t*)buffer, len, -1);
 
+}
+
+double distance_on_geoid(double lat1, double lon1, double lat2, double lon2) {
+
+	// Convert degrees to radians
+	lat1 = lat1 * M_PI / 180.0;
+	lon1 = lon1 * M_PI / 180.0;
+
+	lat2 = lat2 * M_PI / 180.0;
+	lon2 = lon2 * M_PI / 180.0;
+
+	// radius of earth in metres
+	double r = 6378100;
+
+	// P
+	double rho1 = r * cos(lat1);
+	double z1 = r * sin(lat1);
+	double x1 = rho1 * cos(lon1);
+	double y1 = rho1 * sin(lon1);
+
+	// Q
+	double rho2 = r * cos(lat2);
+	double z2 = r * sin(lat2);
+	double x2 = rho2 * cos(lon2);
+	double y2 = rho2 * sin(lon2);
+
+	// Dot product
+	double dot = (x1 * x2 + y1 * y2 + z1 * z2);
+	double cos_theta = dot / (r * r);
+
+	double theta = acos(cos_theta);
+
+	// Distance in Metres
+	return r * theta;
 }
 /* USER CODE END PFP */
 
@@ -654,7 +694,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : IGNITION_SIGNAL_Pin */
   GPIO_InitStruct.Pin = IGNITION_SIGNAL_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(IGNITION_SIGNAL_GPIO_Port, &GPIO_InitStruct);
 
 }
@@ -681,6 +721,11 @@ void MainProcess(void *argument)
 	  //Identification Check
 	  if ((identification == 1)&&(ignition_status == 1)){
 		  xTaskNotifyGive(IMUTaskHandle);
+	  } else {
+		  //Reset IMU Reading
+		  MPU6050.Ax = 0;
+		  MPU6050.Ay = 0;
+		  MPU6050.Az = 0;
 	  }
 	  if(UID[0]== 0x29){ // Need to add driver database
 		  identification = 1;
@@ -688,8 +733,8 @@ void MainProcess(void *argument)
 		  identification = 0;
 	  }
 	  //End of Identification Check
-	  sprintf(txBuffer,"\nID : %x-%x-%x-%x Ignition : %d SEL : %d CHRG : %d Ax = %.2f Ay = %.2f Az = %.2f Fuel : %.2f Accu : %.2f Batt : %.2f ",
-			  UID[0],UID[1],UID[2],UID[3], ignition_status, power_sel, charging, MPU6050.Ax, MPU6050.Ay,MPU6050.Az,MAFiltFuel.out, MAFiltAccu.out, MAFiltBatt.out);
+	  sprintf(txBuffer,"\nID : %x-%x-%x-%x Ignition : %d SEL : %d CHRG : %d Ax = %.2f Ay = %.2f Az = %.2f V : %.2f Fuel : %.2f Accu : %.2f Batt : %.2f ",
+			  UID[0],UID[1],UID[2],UID[3], ignition_status, power_sel, charging, MPU6050.Ax, MPU6050.Ay,MPU6050.Az,speed,MAFiltFuel.out, MAFiltAccu.out, MAFiltBatt.out);
 	  HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
 //	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
     osDelay(10);
@@ -709,7 +754,7 @@ void IMU(void *argument)
   /* USER CODE BEGIN IMU */
 	char txBuffer[100]= {};
 	sprintf(txBuffer, "Running IMU Task..\n");
-
+	float vel[3] = {0,0,0};
 	uint8_t ID = MPU6050_Init(&hi2c1);
 	sprintf(txBuffer,"Id : %d Initialization Success .. \n", ID);
 	HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
@@ -722,9 +767,17 @@ void IMU(void *argument)
 	//Blocking Until Notified
 	ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
 	MPU6050_Read_Accel(&hi2c1, &MPU6050);
+
+	//Calculate Speed
+	vel[0] += MPU6050.Ax * IMU_TS * 0.001; //Vx TS in MS
+	vel[1] += MPU6050.Ay * IMU_TS * 0.001; //Vy
+	vel[2] += (MPU6050.Az - 5.52) * IMU_TS * 0.001; //Vz
+	speed = sqrt(pow(vel[0],2) + pow(vel[1],2) + pow(vel[2],2));
+
+//	speed = CalSpeed(MPU6050, IMU_TS);
 //	sprintf(txBuffer,"Ax = %.2f Ay = %.2f Az = %.2f\n", MPU6050.Ax, MPU6050.Ay,MPU6050.Az );
 //	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
-    osDelay(50);
+    osDelay(IMU_TS);
   }
   /* USER CODE END IMU */
 }
@@ -777,14 +830,15 @@ void GPS(void *argument)
   for(;;)
   {
 	  char txBuffer[200] = {};
-	  sprintf(txBuffer,"\nFlag : %d", flag);
-	  //	  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
 	  if (flag) {
-	  	memset(buffStr, 0, 255);
-	  	sprintf(buffStr, "%s", buff);
-	  //HAL_UART_Transmit(&huart2, (uint8_t *)buffStr, sizeof(buffStr), 70);
-	  // splitting the buffStr by the "\n" delimiter with the strsep() C function
-	  // see http://www.manpagez.com/man/3/strsep/
+	  	/*memset(buffStr, 0, 255);
+	  	 *sprintf(buffStr, "%s", buff);
+	  	 *HAL_UART_Transmit(&huart2, (uint8_t *)buffStr, sizeof(buffStr), 70);
+	   */
+
+	   /*splitting the buffStr by the "\n" delimiter with the strsep() C function
+	   	 see http://www.manpagez.com/man/3/strsep/
+	    */
 	  	char *token, *string;
 	  	// actually splitting the string by "\n" delimiter
 	  	string = strdup(buffStr);
@@ -792,10 +846,12 @@ void GPS(void *argument)
 	  		memset(nmeaSnt, 0, 80);
 	  		sprintf(nmeaSnt, "%s", token);
 
-	  		memset(txBuffer,0,sizeof(txBuffer));
-	  //HAL_UART_Transmit(&huart2, (unsigned char*) txBuffer, sizeof(txBuffer), 100);
-	  // selecting only $GNGLL sentences, combined GPS and GLONAS
-	  // on my GPS sensor this good NMEA sentence is always 50 characters
+	  		/*memset(txBuffer,0,sizeof(txBuffer));
+	  	  	  HAL_UART_Transmit(&huart2, (unsigned char*) txBuffer, sizeof(txBuffer), 100);
+	  	  	*/
+
+	  		// selecting only $GNGLL sentences, combined GPS and GLONAS
+	  		// on my GPS sensor this good NMEA sentence is always 50 characters
 	  		if ((strstr(nmeaSnt, "$GPGGA") != 0) && (strlen(nmeaSnt) > 49) &&(strlen(nmeaSnt) <90) && strstr(nmeaSnt, "*") != 0) {
 	  			rawSum = strstr(nmeaSnt, "*");
 	  			memcpy(smNmbr, &rawSum[1], 2);
@@ -810,12 +866,13 @@ void GPS(void *argument)
 	  			// the data in the the NMEA sentence
 	  			if (strstr(smNmbr, hex) != NULL) {
 	  				cnt = 0;
-	  //			sprintf(txBuffer,"pV : %s\n", pV);
-	  			// splitting the good NMEA sentence into the tokens by the comma delimiter
+	  				// splitting the good NMEA sentence into the tokens by the comma delimiter
 	  				for (char *pV = strtok(nmeaSnt, ","); pV != NULL; pV = strtok(NULL, ",")) {
+	  					/*
 	  					memset(txBuffer,0,sizeof(txBuffer));
-//	  					sprintf(txBuffer,"pV[%d] : %s\n",cnt, pV);
-	  //				HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 100);
+	  					sprintf(txBuffer,"pV[%d] : %s\n",cnt, pV);
+	  					HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 100);
+	  					*/
 	  					switch (cnt) {
 	  						case 1:
 	  							  utcRaw = strdup(pV);
@@ -847,17 +904,16 @@ void GPS(void *argument)
 	  					longitude *= -1.0;
 	  				}
 	  				char * token;
+
 	  				//Get LatitudeDegree
 	  				token = strtok(latRaw, ".");
 	  				memset(latDg, 0, sizeof(latDg));
-	  //			memcpy(latDg, token, strlen(token));
 	  				sprintf(latDg, token);
+
 	  				//Get Minutes
 	  				token = strtok(NULL,".");
 	  				memset(latMS, 0, sizeof(latMS));
-	  //			memcpy(latMS, token, strlen(token));
 	  				sprintf(latMS, token);
-	  //			latMS[7] = '.';
 
 	  				//Get longitude Degree
 	  				float degrees = trunc(latitude / 100.0f);
@@ -877,11 +933,7 @@ void GPS(void *argument)
 	  				memset(lonMS, 0, sizeof(lonMS));
 	  				memcpy(lonMS, token, strlen(token));
 
-	  				memset(txBuffer,0,sizeof(txBuffer));
-	  				sprintf(txBuffer, "latDg : %s latMs : %s lonDg : %s lonMs : %s\n",latDg,latMS,lonDg,lonMS );
-	  //		  HAL_UART_Transmit(&huart2, (unsigned char *)txBuffer, sizeof(txBuffer), 100);
-
-	  					  //converting the UTC time in the hh:mm:ss format
+	  				//converting the UTC time in the hh:mm:ss format
 	  				memcpy(hH, &utcRaw[0], 2);
 	  				hH[2] = '\0';
 
@@ -903,20 +955,30 @@ void GPS(void *argument)
 	  				strcat(strUTC, sS);
 	  				strUTC[8] = '\0';
 
-	  				memset(txBuffer,0,sizeof(txBuffer));
+	  				/*memset(txBuffer,0,sizeof(txBuffer));
 	  				sprintf(txBuffer, "Latitude : %f Longitude : %f UTC : %s\n",latitude,longitude, strUTC);
-//	  				HAL_UART_Transmit(&huart2, (unsigned char *)txBuffer, sizeof(txBuffer), 100);
-
+	  				HAL_UART_Transmit(&huart2, (unsigned char *)txBuffer, sizeof(txBuffer), 100);
+					*/
 	  			} //end of the chekcsum data verification
 	  		} //end of %GPPGA Sentences selection
 	  	}// end of splotting the buffstr by the "\n" delimiter with strsep() c function
 	  	flag = 0;
+
+	  	//Calculate Distance
+	  	GPS_distance = distance_on_geoid(prev_latitude, prev_longitude, latitude, longitude);
+	  	GPS_speed    = (GPS_distance/GPS_TS)*1000; //ms to s
+
+	  	//Update previous location
+	  	prev_latitude = latitude;
+	  	prev_longitude = longitude;
 	  }
 	  else {
+		  GPS_distance = 0;
+		  GPS_speed = 0;
 		  sprintf(txBuffer," GPS no signal..");
 		  HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer, sizeof(txBuffer), 100);
 	  }
-	  osDelay(500);
+	  osDelay(GPS_TS);
   }
   /* USER CODE END GPS */
 }
@@ -1066,6 +1128,8 @@ void SDCard(void *argument)
   /* Infinite loop */
   for(;;)
   {
+	osMutexAcquire(MutexSPI1Handle, portMAX_DELAY);
+	osMutexRelease(MutexSPI1Handle);
     osDelay(1);
   }
   /* USER CODE END SDCard */

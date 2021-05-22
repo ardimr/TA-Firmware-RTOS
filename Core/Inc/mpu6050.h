@@ -104,6 +104,9 @@ typedef struct {
 uint8_t MPU6050_Init(I2C_HandleTypeDef *I2Cx);
 
 int16_t MPU6060_Read_Offset (I2C_HandleTypeDef *I2Cx, char axis);
+
+float CalSpeed(MPU6050_t DataStruct, uint16_t IMU_TS);
+
 void MPU6050_Read_Accel(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStruct);
 
 void MPU6050_Read_Gyro(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStruct);
