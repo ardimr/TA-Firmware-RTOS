@@ -202,6 +202,9 @@ int nmea0183_checksum(char *msg) {
 	}
 	return checksum;
 }
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+	flag = 1;
+}
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
@@ -733,8 +736,9 @@ void MainProcess(void *argument)
 		  identification = 0;
 	  }
 	  //End of Identification Check
-	  sprintf(txBuffer,"\nID : %x-%x-%x-%x Ignition : %d SEL : %d CHRG : %d Ax = %.2f Ay = %.2f Az = %.2f V : %.2f Fuel : %.2f Accu : %.2f Batt : %.2f ",
-			  UID[0],UID[1],UID[2],UID[3], ignition_status, power_sel, charging, MPU6050.Ax, MPU6050.Ay,MPU6050.Az,speed,MAFiltFuel.out, MAFiltAccu.out, MAFiltBatt.out);
+	  memset(txBuffer,0,sizeof(txBuffer));
+	  sprintf(txBuffer,"\nID : %x-%x-%x-%x Ignition : %d SEL : %d CHRG : %d Lat : %.6lf Lon :%.6lf Ax = %.2f Ay = %.2f Az = %.2f V : %.2f Fuel : %.2f Accu : %.2f Batt : %.2f ",
+			  UID[0],UID[1],UID[2],UID[3], ignition_status, power_sel, charging,latitude,longitude, MPU6050.Ax, MPU6050.Ay,MPU6050.Az,GPS_speed,MAFiltFuel.out, MAFiltAccu.out, MAFiltBatt.out);
 	  HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
 //	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
     osDelay(10);
@@ -831,10 +835,10 @@ void GPS(void *argument)
   {
 	  char txBuffer[200] = {};
 	  if (flag) {
-	  	/*memset(buffStr, 0, 255);
-	  	 *sprintf(buffStr, "%s", buff);
-	  	 *HAL_UART_Transmit(&huart2, (uint8_t *)buffStr, sizeof(buffStr), 70);
-	   */
+	  	memset(buffStr, 0, 255);
+	  	sprintf(buffStr, "%s", buff);
+//	  	 HAL_UART_Transmit(&huart2, (uint8_t *)buffStr, sizeof(buffStr), 70);
+
 
 	   /*splitting the buffStr by the "\n" delimiter with the strsep() C function
 	   	 see http://www.manpagez.com/man/3/strsep/
@@ -966,7 +970,7 @@ void GPS(void *argument)
 
 	  	//Calculate Distance
 	  	GPS_distance = distance_on_geoid(prev_latitude, prev_longitude, latitude, longitude);
-	  	GPS_speed    = (GPS_distance/GPS_TS)*1000; //ms to s
+	  	GPS_speed    = (double) (GPS_distance/GPS_TS)*1000; //ms to s
 
 	  	//Update previous location
 	  	prev_latitude = latitude;
@@ -974,6 +978,8 @@ void GPS(void *argument)
 	  }
 	  else {
 		  GPS_distance = 0;
+		  latitude = 0;
+		  longitude = 0;
 		  GPS_speed = 0;
 		  sprintf(txBuffer," GPS no signal..");
 		  HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer, sizeof(txBuffer), 100);
@@ -993,9 +999,13 @@ void GPS(void *argument)
 void RFID(void *argument)
 {
   /* USER CODE BEGIN RFID */
+
 	char txBuffer [100] ={};
 	u_char status, cardstr[MAX_LEN];
 //	u_char checksum
+
+	osMutexAcquire(MutexSPI1Handle, portMAX_DELAY);
+
 	MFRC522_Init();
 	status = 0;
 
@@ -1005,6 +1015,7 @@ void RFID(void *argument)
 		HAL_UART_Transmit(&huart2, (unsigned char*) txBuffer, sizeof(txBuffer), 5000);
 		osDelay(100);
 	}
+	osMutexRelease(MutexSPI1Handle);
 	//Printing to PC
 	memset(txBuffer,0,sizeof(txBuffer));
 	status = 0;
@@ -1055,6 +1066,7 @@ void RFID(void *argument)
 void SDCard(void *argument)
 {
   /* USER CODE BEGIN SDCard */
+	osMutexAcquire(MutexSPI1Handle, portMAX_DELAY);
 	//Open the file system
 	fres = f_mount(&FatFs, "", 1); //1=mount now
 	if (fres != FR_OK) {
@@ -1125,6 +1137,8 @@ void SDCard(void *argument)
 //    f_unlink("/write.txt"); Buat ngedelete file
     //We're done, so de-mount the drive
     f_mount(NULL, "", 0);
+
+    osMutexRelease(MutexSPI1Handle);
   /* Infinite loop */
   for(;;)
   {
