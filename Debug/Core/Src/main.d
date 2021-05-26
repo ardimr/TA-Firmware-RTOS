@@ -51,7 +51,7 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Middlewares/Third_Party/FatFs/src/ff.h ../FATFS/Target/user_diskio.h \
  ../Core/Inc/mpu6050.h ../Core/Inc/MFRC522.h ../Core/Inc/main.h \
  ../Core/Inc/integer_type.h ../Core/Inc/integer_type.h \
- ../Core/Inc/RCFilter.h
+ ../Core/Inc/RCFilter.h ../Core/Inc/KalmanFilter.h
 
 ../Core/Inc/main.h:
 
@@ -172,3 +172,5 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Core/Inc/integer_type.h:
 
 ../Core/Inc/RCFilter.h:
+
+../Core/Inc/KalmanFilter.h:

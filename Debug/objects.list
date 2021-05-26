@@ -1,3 +1,4 @@
+"Core/Src/KalmanFilter.o"
 "Core/Src/MFRC522.o"
 "Core/Src/RCFilter.o"
 "Core/Src/freertos.o"

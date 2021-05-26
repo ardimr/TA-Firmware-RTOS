@@ -12,6 +12,7 @@ typedef struct {
 	float out;
 }MovAvgFilter;
 
+
 void RCFilter_Init(RCFilter * filter, float cutoffFreqHz, float sampleFreq_Hz);
 float RCFilter_Update(RCFilter *filter, float input);
 

@@ -14,5 +14,5 @@ MFRC522.c:401:8:MFRC522_Write	56	static
 MFRC522.c:442:6:CalulateCRC	40	static
 MFRC522.c:483:8:MFRC522_Auth	56	static
 MFRC522.c:518:8:MFRC522_SelectTag	48	static
-MFRC522.c:556:6:MFRC522_Halt	32	static
+MFRC522.c:556:6:MFRC522_Halt	24	static
 MFRC522.c:570:6:MFRC522_StopCrypto1	8	static

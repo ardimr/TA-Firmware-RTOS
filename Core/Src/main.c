@@ -33,6 +33,7 @@
 #include <math.h>
 #include "RCFilter.h"
 #include <stdarg.h>
+#include "KalmanFilter.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -152,9 +153,12 @@ const osMutexAttr_t mutexIMU_attributes = {
 	MPU6050_t MPU6050;
 	float speed;
 	float acc_buff[ACC_BUFF_LEN];
+	double acc;
 	float acc_max, acc_avg;
 	float speed_max, speed_avg;
 	uint16_t imu_index;
+
+	MatrixTransform MatrixTranform;
 	//RFID Variable
 	uint8_t UID[4]={};
 	uint8_t identification = 0;
@@ -794,6 +798,8 @@ void IMU(void *argument)
 	sprintf(txBuffer,"Id : %d Initialization Success .. \n", ID);
 	HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
 
+	//Init Matrix Transformation
+	MatrixTransformInit(&MatrixTranform);
 	//Clearing Buffer
 	memset(txBuffer,0,sizeof(txBuffer));
 	osDelay(200);
@@ -804,6 +810,8 @@ void IMU(void *argument)
 	//Blocking Until Notified
 	ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
 	MPU6050_Read_Accel(&hi2c1, &MPU6050);
+	//Frame Transformation
+	acc = MPU6050.Ax * MatrixTranform.x[0] + MPU6050.Ay * MatrixTranform.x[1]+MPU6050.Az*MatrixTranform.x[2];
 
 	//Calculate Speed
 	vel[0] += MPU6050.Ax * IMU_TS * 0.001; //Vx TS in MS
@@ -820,11 +828,10 @@ void IMU(void *argument)
 	}
 
 	//calculate maximum acceleration
-	if(MPU6050.Ax > acc_max){
-		acc_max = MPU6050.Ax;
+	if(acc > acc_max){
+		acc_max = acc;
 	}
 	//calculate average
-
 	speed_avg = (speed/imu_index) + (speed_avg/imu_index);
 
 	osMutexRelease(mutexIMUHandle);
