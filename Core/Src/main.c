@@ -49,6 +49,10 @@
 
 #define IMU_TS 50
 #define GPS_TS 500
+
+#define ACC_BUFF_LEN 100
+#define SPEED_BUFF_LEN 100
+#define LOG_LENGTH 6
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -124,10 +128,22 @@ const osThreadAttr_t IgnitionTask_attributes = {
   .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
 };
+/* Definitions for LoggingDataTask */
+osThreadId_t LoggingDataTaskHandle;
+const osThreadAttr_t LoggingDataTask_attributes = {
+  .name = "LoggingDataTask",
+  .stack_size = 128 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
 /* Definitions for MutexSPI1 */
 osMutexId_t MutexSPI1Handle;
 const osMutexAttr_t MutexSPI1_attributes = {
   .name = "MutexSPI1"
+};
+/* Definitions for mutexIMU */
+osMutexId_t mutexIMUHandle;
+const osMutexAttr_t mutexIMU_attributes = {
+  .name = "mutexIMU"
 };
 /* USER CODE BEGIN PV */
 	//task Handle
@@ -135,7 +151,10 @@ const osMutexAttr_t MutexSPI1_attributes = {
 	//IMU Variable
 	MPU6050_t MPU6050;
 	float speed;
-
+	float acc_buff[ACC_BUFF_LEN];
+	float acc_max, acc_avg;
+	float speed_max, speed_avg;
+	uint16_t imu_index;
 	//RFID Variable
 	uint8_t UID[4]={};
 	uint8_t identification = 0;
@@ -169,6 +188,11 @@ const osMutexAttr_t MutexSPI1_attributes = {
 	uint8_t power_sel = 0; //accu usage
 	uint8_t charging = 0;
 
+	//Logging Data Variables
+	float log_acc_max[LOG_LENGTH] = {};
+	float log_acc_avg[LOG_LENGTH] = {};
+	float log_speed_max[LOG_LENGTH] = {};
+	float log_speed_avg[LOG_LENGTH] = {};
 
 /* USER CODE END PV */
 
@@ -189,6 +213,7 @@ void SDCard(void *argument);
 void ADCProcesing(void *argument);
 void PowManagement(void *argument);
 void Ignition(void *argument);
+void LoggingData(void *argument);
 
 /* USER CODE BEGIN PFP */
 // function to calculate checksum of the NMEA sentence
@@ -313,6 +338,9 @@ int main(void)
   /* creation of MutexSPI1 */
   MutexSPI1Handle = osMutexNew(&MutexSPI1_attributes);
 
+  /* creation of mutexIMU */
+  mutexIMUHandle = osMutexNew(&mutexIMU_attributes);
+
   /* USER CODE BEGIN RTOS_MUTEX */
   /* add mutexes, ... */
   /* USER CODE END RTOS_MUTEX */
@@ -353,6 +381,9 @@ int main(void)
 
   /* creation of IgnitionTask */
   IgnitionTaskHandle = osThreadNew(Ignition, NULL, &IgnitionTask_attributes);
+
+  /* creation of LoggingDataTask */
+  LoggingDataTaskHandle = osThreadNew(LoggingData, NULL, &LoggingDataTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -762,12 +793,14 @@ void IMU(void *argument)
 	uint8_t ID = MPU6050_Init(&hi2c1);
 	sprintf(txBuffer,"Id : %d Initialization Success .. \n", ID);
 	HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
+
 	//Clearing Buffer
 	memset(txBuffer,0,sizeof(txBuffer));
 	osDelay(200);
   /* Infinite loop */
   for(;;)
   {
+
 	//Blocking Until Notified
 	ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
 	MPU6050_Read_Accel(&hi2c1, &MPU6050);
@@ -778,8 +811,26 @@ void IMU(void *argument)
 	vel[2] += (MPU6050.Az - 5.52) * IMU_TS * 0.001; //Vz
 	speed = sqrt(pow(vel[0],2) + pow(vel[1],2) + pow(vel[2],2));
 
+	osMutexAcquire(mutexIMUHandle, portMAX_DELAY);
+
+	imu_index++;
+	//Calculate maximum speed
+	if(speed > speed_max){
+		speed_max = speed;
+	}
+
+	//calculate maximum acceleration
+	if(MPU6050.Ax > acc_max){
+		acc_max = MPU6050.Ax;
+	}
+	//calculate average
+
+	speed_avg = (speed/imu_index) + (speed_avg/imu_index);
+
+	osMutexRelease(mutexIMUHandle);
+
 //	speed = CalSpeed(MPU6050, IMU_TS);
-//	sprintf(txBuffer,"Ax = %.2f Ay = %.2f Az = %.2f\n", MPU6050.Ax, MPU6050.Ay,MPU6050.Az );
+//	sprintf(txBuffer,"Ax = %.2f Ay = %.2f Az = %.2f\n", MPU6050.Ax, MPU6050.Ay, MPU6050.Az );
 //	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
     osDelay(IMU_TS);
   }
@@ -1265,6 +1316,45 @@ void Ignition(void *argument)
     osDelay(200);
   }
   /* USER CODE END Ignition */
+}
+
+/* USER CODE BEGIN Header_LoggingData */
+/**
+* @brief Function implementing the LoggingDataTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_LoggingData */
+void LoggingData(void *argument)
+{
+  /* USER CODE BEGIN LoggingData */
+	uint8_t index = 0;
+  /* Infinite loop */
+  for(;;)
+  {
+	log_acc_avg[index] = acc_avg;
+	log_acc_max[index] = acc_max;
+	log_speed_max[index] = speed_max;
+	log_speed_max[index] = speed_avg;
+
+	//Increment Index
+	index++;
+
+	if(index > LOG_LENGTH){
+		osMutexAcquire(mutexIMUHandle, portMAX_DELAY);
+		index = 0;
+		//Add clearing array
+		imu_index = 0;
+		speed_avg = 0;
+		speed_max = 0;
+		acc_avg = 0;
+		acc_max = 0;
+		osMutexRelease(mutexIMUHandle);
+	}
+
+    osDelay(10*1000);
+  }
+  /* USER CODE END LoggingData */
 }
 
  /**
