@@ -133,8 +133,8 @@ const osThreadAttr_t IgnitionTask_attributes = {
 osThreadId_t LoggingDataTaskHandle;
 const osThreadAttr_t LoggingDataTask_attributes = {
   .name = "LoggingDataTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 250 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for MutexSPI1 */
 osMutexId_t MutexSPI1Handle;
@@ -197,6 +197,15 @@ const osMutexAttr_t mutexIMU_attributes = {
 	float log_acc_avg[LOG_LENGTH] = {};
 	float log_speed_max[LOG_LENGTH] = {};
 	float log_speed_avg[LOG_LENGTH] = {};
+	double log_latitude[LOG_LENGTH] = {};
+	double log_longitude[LOG_LENGTH] = {};
+	float log_fuel[LOG_LENGTH] = {};
+	float log_accu[LOG_LENGTH] = {};
+	float log_batt[LOG_LENGTH] = {};
+
+	//Payload
+	char payload[2048];
+
 
 /* USER CODE END PV */
 
@@ -771,10 +780,16 @@ void MainProcess(void *argument)
 		  identification = 0;
 	  }
 	  //End of Identification Check
-	  memset(txBuffer,0,sizeof(txBuffer));
+//	  memset(txBuffer,0,sizeof(txBuffer));
+	  /*
 	  sprintf(txBuffer,"\nID : %x-%x-%x-%x Ignition : %d SEL : %d CHRG : %d Lat : %.6lf Lon :%.6lf Ax = %.2f Ay = %.2f Az = %.2f V : %.2f Fuel : %.2f Accu : %.2f Batt : %.2f ",
 			  UID[0],UID[1],UID[2],UID[3], ignition_status, power_sel, charging,latitude,longitude, MPU6050.Ax, MPU6050.Ay,MPU6050.Az,GPS_speed,MAFiltFuel.out, MAFiltAccu.out, MAFiltBatt.out);
-	  HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
+	  */
+//	  sprintf(txBuffer,"\nID : %x-%x-%x-%x Ignition : %d SEL : %d CHRG : %d",
+//			  UID[0],UID[1],UID[2],UID[3], ignition_status, power_sel, charging);
+//
+//
+//	  HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
 //	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
     osDelay(10);
   }
@@ -793,7 +808,7 @@ void IMU(void *argument)
   /* USER CODE BEGIN IMU */
 	char txBuffer[100]= {};
 	sprintf(txBuffer, "Running IMU Task..\n");
-	float vel[3] = {0,0,0};
+//	float vel[3] = {0,0,0};
 	uint8_t ID = MPU6050_Init(&hi2c1);
 	sprintf(txBuffer,"Id : %d Initialization Success .. \n", ID);
 	HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
@@ -814,11 +829,13 @@ void IMU(void *argument)
 	acc = MPU6050.Ax * MatrixTranform.x[0] + MPU6050.Ay * MatrixTranform.x[1]+MPU6050.Az*MatrixTranform.x[2];
 
 	//Calculate Speed
+	/*
 	vel[0] += MPU6050.Ax * IMU_TS * 0.001; //Vx TS in MS
 	vel[1] += MPU6050.Ay * IMU_TS * 0.001; //Vy
 	vel[2] += (MPU6050.Az - 5.52) * IMU_TS * 0.001; //Vz
 	speed = sqrt(pow(vel[0],2) + pow(vel[1],2) + pow(vel[2],2));
-
+	*/
+	speed += acc * IMU_TS *0.001;
 	osMutexAcquire(mutexIMUHandle, portMAX_DELAY);
 
 	imu_index++;
@@ -832,7 +849,8 @@ void IMU(void *argument)
 		acc_max = acc;
 	}
 	//calculate average
-	speed_avg = (speed/imu_index) + (speed_avg/imu_index);
+	acc_avg = (acc_avg*(imu_index-1)/imu_index) + (acc/imu_index);
+	speed_avg = (speed_avg*(imu_index-1)/imu_index) + (speed/imu_index);
 
 	osMutexRelease(mutexIMUHandle);
 
@@ -1039,8 +1057,8 @@ void GPS(void *argument)
 		  latitude = 0;
 		  longitude = 0;
 		  GPS_speed = 0;
-		  sprintf(txBuffer," GPS no signal..");
-		  HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer, sizeof(txBuffer), 100);
+//		  sprintf(txBuffer," GPS no signal..");
+//		  HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer, sizeof(txBuffer), 100);
 	  }
 	  osDelay(GPS_TS);
   }
@@ -1129,7 +1147,8 @@ void SDCard(void *argument)
 	fres = f_mount(&FatFs, "", 1); //1=mount now
 	if (fres != FR_OK) {
 		myprintf("f_mount error (%i)\r\n", fres);
-		while(1);
+		osMutexRelease(MutexSPI1Handle);
+
 	}
 	//Let's get some statistics from the SD card
 	DWORD free_clusters, free_sectors, total_sectors;
@@ -1137,8 +1156,8 @@ void SDCard(void *argument)
 
     fres = f_getfree("", &free_clusters, &getFreeFs);
     if (fres != FR_OK) {
-  	myprintf("f_getfree error (%i)\r\n", fres);
-  	while(1);
+    	myprintf("f_getfree error (%i)\r\n", fres);
+    	osMutexRelease(MutexSPI1Handle);
     }
 
     //Formula comes from ChaN's documentation
@@ -1150,8 +1169,8 @@ void SDCard(void *argument)
     //Now let's try to open file "test.txt"
     fres = f_open(&fil, "tesjson.txt", FA_READ);
     if (fres != FR_OK) {
-  	myprintf("f_open error (%i)\r\n");
-  	while(1);
+    	myprintf("f_open error (%i)\r\n");
+    	osMutexRelease(MutexSPI1Handle);
     }
     myprintf("I was able to open 'tesjson.txt' for reading!\r\n");
 
@@ -1162,9 +1181,9 @@ void SDCard(void *argument)
     //f_gets is a wrapper on f_read that does some string formatting for us
     TCHAR* rres = f_gets((TCHAR*)readBuf, 100, &fil);
     if(rres != 0) {
-  	myprintf("Read string from 'tesjson.txt'' contents: %s\r\n", readBuf);
+    	myprintf("Read string from 'tesjson.txt'' contents: %s\r\n", readBuf);
     } else {
-  	myprintf("f_gets error (%i)\r\n", fres);
+    	myprintf("f_gets error (%i)\r\n", fres);
     }
 
     //Be a tidy kiwi - don't forget to close your file!
@@ -1236,6 +1255,7 @@ void ADCProcesing(void *argument)
 	HAL_ADC_Start_DMA(&hadc1, buffer, 3);
 	sprintf(txBuffer,"ADC Intialization Success..\n");
 	HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), HAL_MAX_DELAY);
+	osDelay(100);
   /* Infinite loop */
   for(;;)
   {
@@ -1336,18 +1356,28 @@ void LoggingData(void *argument)
 {
   /* USER CODE BEGIN LoggingData */
 	uint8_t index = 0;
+	char txBuffer[100];
   /* Infinite loop */
   for(;;)
   {
 	log_acc_avg[index] = acc_avg;
 	log_acc_max[index] = acc_max;
 	log_speed_max[index] = speed_max;
-	log_speed_max[index] = speed_avg;
+	log_speed_avg[index] = speed_avg;
+	log_latitude[index] = latitude;
+	log_longitude[index] = longitude;
+	log_fuel[index] = MAFiltFuel.out;
+	log_accu[index] = MAFiltAccu.out;
+	log_batt[index] = MAFiltBatt.out;
 
 	//Increment Index
 	index++;
-
 	if(index > LOG_LENGTH){
+		//Create Payload Form
+
+		memset(txBuffer, 0, sizeof(txBuffer));
+		sprintf(txBuffer,"\nSending..");
+		HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
 		osMutexAcquire(mutexIMUHandle, portMAX_DELAY);
 		index = 0;
 		//Add clearing array
@@ -1358,7 +1388,17 @@ void LoggingData(void *argument)
 		acc_max = 0;
 		osMutexRelease(mutexIMUHandle);
 	}
+	memset(payload,0,sizeof(payload)); //clearing form
+	sprintf(payload,"\"`{\\\"tw\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\":[\\\"%lf,%lf\\\",\\\"%lf,%lf\\\"],\\\"k_max\\\":[43.99,55.65],\\\"k_avg\\\":[76.99,82.97],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[3.62,83.87],\\\"a_avg\\\":[91.39,62.66],\\\"tb\\\":[6.07,6.39],\\\"ta\\\":[5.10,1.99],\\\"bb\\\":[0.92,0.98],\\\"si\\\":[0,1],\\\"kurir\\\":1}`\"",
+					log_latitude[0],log_longitude[0], log_latitude[1], log_longitude[1]);
 
+	HAL_UART_Transmit(&huart2, (uint8_t*)payload, sizeof(payload), 100);
+//	for(int i = 0; i<LOG_LENGTH; i++){
+//				memset(txBuffer, 0, sizeof(txBuffer));
+//				sprintf(txBuffer,"\n[%d] acc_avg: %.2f acc_max: %.2f speed_avg: %.2f speed_max: %.2f",
+//						i,log_acc_avg[i],log_acc_max[i], log_speed_avg[i], log_speed_max[i]);
+//				HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
+//			}
     osDelay(10*1000);
   }
   /* USER CODE END LoggingData */
