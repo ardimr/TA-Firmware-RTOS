@@ -34,6 +34,8 @@
 #include "RCFilter.h"
 #include <stdarg.h>
 #include "KalmanFilter.h"
+#include "MQTTSim800.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -53,7 +55,7 @@
 
 #define ACC_BUFF_LEN 100
 #define SPEED_BUFF_LEN 100
-#define LOG_LENGTH 6
+#define LOG_LENGTH 2
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -71,6 +73,7 @@ SPI_HandleTypeDef hspi1;
 
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
+UART_HandleTypeDef huart6;
 DMA_HandleTypeDef hdma_usart1_rx;
 
 /* Definitions for MainProcessTask */
@@ -106,7 +109,7 @@ osThreadId_t SDCardTaskHandle;
 const osThreadAttr_t SDCardTask_attributes = {
   .name = "SDCardTask",
   .stack_size = 250 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for ADCProcessingTa */
 osThreadId_t ADCProcessingTaHandle;
@@ -134,6 +137,13 @@ osThreadId_t LoggingDataTaskHandle;
 const osThreadAttr_t LoggingDataTask_attributes = {
   .name = "LoggingDataTask",
   .stack_size = 250 * 4,
+  .priority = (osPriority_t) osPriorityHigh,
+};
+/* Definitions for SendDataTask */
+osThreadId_t SendDataTaskHandle;
+const osThreadAttr_t SendDataTask_attributes = {
+  .name = "SendDataTask",
+  .stack_size = 128 * 4,
   .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for MutexSPI1 */
@@ -202,6 +212,8 @@ const osMutexAttr_t mutexIMU_attributes = {
 	float log_fuel[LOG_LENGTH] = {};
 	float log_accu[LOG_LENGTH] = {};
 	float log_batt[LOG_LENGTH] = {};
+	uint8_t log_ignition_status [LOG_LENGTH] = {};
+
 
 	//Payload
 	char payload[2048];
@@ -218,6 +230,7 @@ static void MX_I2C1_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_USART6_UART_Init(void);
 void MainProcess(void *argument);
 void IMU(void *argument);
 void GPS(void *argument);
@@ -227,6 +240,7 @@ void ADCProcesing(void *argument);
 void PowManagement(void *argument);
 void Ignition(void *argument);
 void LoggingData(void *argument);
+void SendData(void *argument);
 
 /* USER CODE BEGIN PFP */
 // function to calculate checksum of the NMEA sentence
@@ -241,7 +255,11 @@ int nmea0183_checksum(char *msg) {
 	return checksum;
 }
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-	flag = 1;
+	if (huart == UART_SIM800) {
+		Sim800_RxCallBack();
+	} else {
+		flag = 1; //GPS Flag
+	}
 }
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
@@ -297,6 +315,7 @@ double distance_on_geoid(double lat1, double lon1, double lat2, double lon2) {
 	// Distance in Metres
 	return r * theta;
 }
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -339,6 +358,7 @@ int main(void)
   MX_USART1_UART_Init();
   MX_ADC1_Init();
   MX_FATFS_Init();
+  MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
   char txBuffer [100] = {};
   sprintf(txBuffer, "Bismillah..\n");
@@ -397,6 +417,9 @@ int main(void)
 
   /* creation of LoggingDataTask */
   LoggingDataTaskHandle = osThreadNew(LoggingData, NULL, &LoggingDataTask_attributes);
+
+  /* creation of SendDataTask */
+  SendDataTaskHandle = osThreadNew(SendData, NULL, &SendDataTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -673,6 +696,39 @@ static void MX_USART2_UART_Init(void)
 }
 
 /**
+  * @brief USART6 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART6_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART6_Init 0 */
+
+  /* USER CODE END USART6_Init 0 */
+
+  /* USER CODE BEGIN USART6_Init 1 */
+
+  /* USER CODE END USART6_Init 1 */
+  huart6.Instance = USART6;
+  huart6.Init.BaudRate = 115200;
+  huart6.Init.WordLength = UART_WORDLENGTH_8B;
+  huart6.Init.StopBits = UART_STOPBITS_1;
+  huart6.Init.Parity = UART_PARITY_NONE;
+  huart6.Init.Mode = UART_MODE_TX_RX;
+  huart6.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart6.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart6) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART6_Init 2 */
+
+  /* USER CODE END USART6_Init 2 */
+
+}
+
+/**
   * Enable DMA controller clock
   */
 static void MX_DMA_Init(void)
@@ -909,7 +965,7 @@ void GPS(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	  char txBuffer[200] = {};
+//	  char txBuffer[200] = {};
 	  if (flag) {
 	  	memset(buffStr, 0, 255);
 	  	sprintf(buffStr, "%s", buff);
@@ -1115,8 +1171,8 @@ void RFID(void *argument)
 			  for(int i = 0; i <4 ;i++){
 				  UID[i]=cardstr[i];
 			  }
-//			  sprintf(txBuffer,"UID: %x %x %x %x\n\r",(u_char)cardstr[0], (u_char)cardstr[1],(u_char)cardstr[2],(u_char)cardstr[3]);
-//			  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
+			  sprintf(txBuffer,"UID: %x %x %x %x\n\r",(u_char)cardstr[0], (u_char)cardstr[1],(u_char)cardstr[2],(u_char)cardstr[3]);
+			  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
 		  }
 	  }
 	  else {
@@ -1127,7 +1183,7 @@ void RFID(void *argument)
 //		  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
 	  }
 	  osMutexRelease(MutexSPI1Handle);
-    osDelay(100);
+    osDelay(250);
   }
   /* USER CODE END RFID */
 }
@@ -1148,7 +1204,6 @@ void SDCard(void *argument)
 	if (fres != FR_OK) {
 		myprintf("f_mount error (%i)\r\n", fres);
 		osMutexRelease(MutexSPI1Handle);
-
 	}
 	//Let's get some statistics from the SD card
 	DWORD free_clusters, free_sectors, total_sectors;
@@ -1219,8 +1274,8 @@ void SDCard(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	osMutexAcquire(MutexSPI1Handle, portMAX_DELAY);
-	osMutexRelease(MutexSPI1Handle);
+	 ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
+
     osDelay(1);
   }
   /* USER CODE END SDCard */
@@ -1356,7 +1411,7 @@ void LoggingData(void *argument)
 {
   /* USER CODE BEGIN LoggingData */
 	uint8_t index = 0;
-	char txBuffer[100];
+//	char txBuffer[100];
   /* Infinite loop */
   for(;;)
   {
@@ -1369,15 +1424,13 @@ void LoggingData(void *argument)
 	log_fuel[index] = MAFiltFuel.out;
 	log_accu[index] = MAFiltAccu.out;
 	log_batt[index] = MAFiltBatt.out;
+	log_ignition_status[index] = ignition_status;
 
 	//Increment Index
 	index++;
 	if(index > LOG_LENGTH){
 		//Create Payload Form
-
-		memset(txBuffer, 0, sizeof(txBuffer));
-		sprintf(txBuffer,"\nSending..");
-		HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
+		xTaskNotifyGive(SendDataTaskHandle);
 		osMutexAcquire(mutexIMUHandle, portMAX_DELAY);
 		index = 0;
 		//Add clearing array
@@ -1387,12 +1440,12 @@ void LoggingData(void *argument)
 		acc_avg = 0;
 		acc_max = 0;
 		osMutexRelease(mutexIMUHandle);
+		memset(payload,0,sizeof(payload)); //clearing form
+		sprintf(payload,"\"`{\\\"tw\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\":[\\\"%lf,%lf\\\",\\\"%lf,%lf\\\"],\\\"k_max\\\":[%.2f,%.2f],\\\"k_avg\\\":[%.2f,%.2f],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[%.2f,%.2f],\\\"a_avg\\\":[%.2f,%.2f],\\\"tb\\\":[%.2f,%.2f],\\\"ta\\\":[%.2f,%.2f],\\\"bb\\\":[%.2f,%.2f],\\\"si\\\":[%d,%d],\\\"kurir\\\":1}`\"",
+				log_latitude[0],log_longitude[0], log_latitude[1], log_longitude[1], log_speed_max[0],log_speed_max[1],log_speed_avg[0],log_speed_avg[1],log_acc_max[0],log_acc_max[1], log_acc_avg[0], log_acc_avg[1], log_batt[0], log_batt[1], log_accu[0], log_accu[1],log_fuel[0], log_fuel[1], log_ignition_status[0], log_ignition_status[1]);
 	}
-	memset(payload,0,sizeof(payload)); //clearing form
-	sprintf(payload,"\"`{\\\"tw\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\":[\\\"%lf,%lf\\\",\\\"%lf,%lf\\\"],\\\"k_max\\\":[43.99,55.65],\\\"k_avg\\\":[76.99,82.97],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[3.62,83.87],\\\"a_avg\\\":[91.39,62.66],\\\"tb\\\":[6.07,6.39],\\\"ta\\\":[5.10,1.99],\\\"bb\\\":[0.92,0.98],\\\"si\\\":[0,1],\\\"kurir\\\":1}`\"",
-					log_latitude[0],log_longitude[0], log_latitude[1], log_longitude[1]);
 
-	HAL_UART_Transmit(&huart2, (uint8_t*)payload, sizeof(payload), 100);
+//	HAL_UART_Transmit(&huart2, (uint8_t*)payload, sizeof(payload), 100);
 //	for(int i = 0; i<LOG_LENGTH; i++){
 //				memset(txBuffer, 0, sizeof(txBuffer));
 //				sprintf(txBuffer,"\n[%d] acc_avg: %.2f acc_max: %.2f speed_avg: %.2f speed_max: %.2f",
@@ -1402,6 +1455,56 @@ void LoggingData(void *argument)
     osDelay(10*1000);
   }
   /* USER CODE END LoggingData */
+}
+
+/* USER CODE BEGIN Header_SendData */
+/**
+* @brief Function implementing the SendDataTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_SendData */
+void SendData(void *argument)
+{
+	char txBuffer[50] ={};
+		char * topic = "client-1";
+	  /* USER CODE BEGIN SenData */
+		uint8_t error = 0;
+		error += SIM800_Init();
+
+		if(error >0 ){
+			sprintf(txBuffer,"Initialization fail\n");
+		} else {
+			sprintf(txBuffer,"Initialization success\n");
+		}
+		HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
+		//Connecting to broker
+		error += MQTT_Connect("indosatgprs", "", "", "3.210.14.248", 1883, "faisa", "disadacepetlulus", "client-1", 1000);
+
+		memset(txBuffer,0,sizeof(txBuffer));
+
+		if(error >0 ){
+			  error = 0;
+		      error += SIM800_SendCommand("AT+RST=1\r\n", "READY\r\n", 1000);
+		  	  osDelay(pdMS_TO_TICKS(20*1000));
+		  	  error += MQTT_Connect("indosatgprs", "", "", "3.210.14.248", 1883, "faisa", "disadacepetlulus", "client-1", 1000);
+		  }
+		HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
+
+
+	  /* Infinite loop */
+	  for(;;)
+	  {
+		  //Blocking Until Notified
+		  	ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
+		  	memset(txBuffer, 0, sizeof(txBuffer));
+		  	sprintf(txBuffer,"\nSending..");
+		  	HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
+		  //Send Payload
+		  	MQTT_Pub(topic, payload);
+	    osDelay(pdMS_TO_TICKS((5*1000)));
+	  }
+  /* USER CODE END SendData */
 }
 
  /**

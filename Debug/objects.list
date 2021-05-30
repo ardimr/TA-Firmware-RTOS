@@ -1,5 +1,6 @@
 "Core/Src/KalmanFilter.o"
 "Core/Src/MFRC522.o"
+"Core/Src/MQTTSim800.o"
 "Core/Src/RCFilter.o"
 "Core/Src/freertos.o"
 "Core/Src/main.o"
