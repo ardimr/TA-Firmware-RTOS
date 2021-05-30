@@ -37,6 +37,8 @@
 #include "main.h"
 #include <string.h>
 #include <stdbool.h>
+#include <stdlib.h>
+#include <stdio.h>
 //#include "usart.h"
 #include "stm32f4xx_hal.h"
 
@@ -156,8 +158,8 @@ int SIM800_Init(void) {
 int MQTT_Connect(char *apn, char *apn_user, char *apn_pass, char *host, uint16_t port, char *username, char *pass,
                  char *clientID, unsigned short keepAliveInterval) {
     int error = 0;
-    char str[64] = {0};
-    unsigned char buf[64] = {0};
+    char str[256] = {0};
+//    unsigned char buf[64] = {0};
 //    MQTTPacket_connectData datas = MQTTPacket_connectData_initializer;
 //    datas.username.cstring = username;
 //    datas.password.cstring = pass;
@@ -174,12 +176,12 @@ int MQTT_Connect(char *apn, char *apn_user, char *apn_pass, char *host, uint16_t
     error += SIM800_SendCommand("AT+CREG?\r\n", "OK\r\n", CMD_DELAY);
 
     error += SIM800_SendCommand("AT+CGACT=1,1\r\n", "OK\r\n", CMD_DELAY);
-    HAL_UART_Transmit(&huart2, (uint8_t*) answer, sizeof(answer), 100);
+//    HAL_UART_Transmit(&huart2, (uint8_t*) answer, sizeof(answer), 100);
     memset(str, 0, sizeof(str));
 
-    sprintf(str, "AT+MQTTCONN=\"%s\",%d,\"%s\",%d,0\r\n", host, port, clientID, keepAliveInterval);
+    sprintf(str, "AT+MQTTCONN=\"%s\",%d,\"%s\",%d,0,\"%s\",\"%s\"\r\n", host, port, clientID, keepAliveInterval,username,pass);
     error += SIM800_SendCommand(str, "OK\r\n", CMD_DELAY);
-
+    HAL_UART_Transmit(&huart2, (uint8_t*) answer, sizeof(answer), 100);
     return error;
 }
 
@@ -192,7 +194,7 @@ int MQTT_Connect(char *apn, char *apn_user, char *apn_pass, char *host, uint16_t
 int MQTT_Pub(char *topic, char *payload) {
     int error = 0;
 //    unsigned char buf[1024] = {0};
-    char str[1024] = {0};
+    char str[4096] = {0};
 
 //    MQTTString topicString = MQTTString_initializer;
 //    topicString.cstring = topic;
@@ -203,6 +205,7 @@ int MQTT_Pub(char *topic, char *payload) {
 
     sprintf(str, "AT+MQTTPUB=\"%s\",\"%s\",0,0,0\r\n", topic, payload);
     error += SIM800_SendCommand(str, "OK\r\n", CMD_DELAY);
+    HAL_UART_Transmit(&huart2, (uint8_t*) answer, sizeof(answer), 100);
     return error;
 }
 
@@ -219,4 +222,5 @@ int MQTT_PingReq(void) {
 //    error += SIM800_SendData(buf, mqtt_len);
 //
 //    return error;
+	return 0;
 }

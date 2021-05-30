@@ -80,7 +80,7 @@ DMA_HandleTypeDef hdma_usart1_rx;
 osThreadId_t MainProcessTaskHandle;
 const osThreadAttr_t MainProcessTask_attributes = {
   .name = "MainProcessTask",
-  .stack_size = 400 * 4,
+  .stack_size = 250 * 4,
   .priority = (osPriority_t) osPriorityNormal1,
 };
 /* Definitions for IMUTask */
@@ -118,32 +118,18 @@ const osThreadAttr_t ADCProcessingTa_attributes = {
   .stack_size = 250 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
-/* Definitions for PowerManagement */
-osThreadId_t PowerManagementHandle;
-const osThreadAttr_t PowerManagement_attributes = {
-  .name = "PowerManagement",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityLow,
-};
-/* Definitions for IgnitionTask */
-osThreadId_t IgnitionTaskHandle;
-const osThreadAttr_t IgnitionTask_attributes = {
-  .name = "IgnitionTask",
-  .stack_size = 128 * 4,
-  .priority = (osPriority_t) osPriorityBelowNormal,
-};
 /* Definitions for LoggingDataTask */
 osThreadId_t LoggingDataTaskHandle;
 const osThreadAttr_t LoggingDataTask_attributes = {
   .name = "LoggingDataTask",
-  .stack_size = 250 * 4,
-  .priority = (osPriority_t) osPriorityHigh,
+  .stack_size = 400 * 4,
+  .priority = (osPriority_t) osPriorityAboveNormal,
 };
 /* Definitions for SendDataTask */
 osThreadId_t SendDataTaskHandle;
 const osThreadAttr_t SendDataTask_attributes = {
   .name = "SendDataTask",
-  .stack_size = 128 * 4,
+  .stack_size = 2048 * 4,
   .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for MutexSPI1 */
@@ -216,7 +202,7 @@ const osMutexAttr_t mutexIMU_attributes = {
 
 
 	//Payload
-	char payload[2048];
+	char payload[4096];
 
 
 /* USER CODE END PV */
@@ -237,8 +223,6 @@ void GPS(void *argument);
 void RFID(void *argument);
 void SDCard(void *argument);
 void ADCProcesing(void *argument);
-void PowManagement(void *argument);
-void Ignition(void *argument);
 void LoggingData(void *argument);
 void SendData(void *argument);
 
@@ -408,12 +392,6 @@ int main(void)
 
   /* creation of ADCProcessingTa */
   ADCProcessingTaHandle = osThreadNew(ADCProcesing, NULL, &ADCProcessingTa_attributes);
-
-  /* creation of PowerManagement */
-  PowerManagementHandle = osThreadNew(PowManagement, NULL, &PowerManagement_attributes);
-
-  /* creation of IgnitionTask */
-  IgnitionTaskHandle = osThreadNew(Ignition, NULL, &IgnitionTask_attributes);
 
   /* creation of LoggingDataTask */
   LoggingDataTaskHandle = osThreadNew(LoggingData, NULL, &LoggingDataTask_attributes);
@@ -817,7 +795,13 @@ void MainProcess(void *argument)
 {
   /* USER CODE BEGIN 5 */
 	char txBuffer [200] = {};
-	sprintf(txBuffer, "Running Display Task..\n");
+	sprintf(txBuffer, "Running Main Process..\n");
+
+	//Initialize Power Control
+	HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
+
+
   /* Infinite loop */
   for(;;)
   {
@@ -836,6 +820,43 @@ void MainProcess(void *argument)
 		  identification = 0;
 	  }
 	  //End of Identification Check
+
+	  /* Setting Ignition Switch Logic*/
+	  if(identification == 1){
+		  //Set Ignition Logic
+		  HAL_GPIO_WritePin(IGNITION_LOGIC_GPIO_Port, IGNITION_LOGIC_Pin, GPIO_PIN_SET);
+	  }
+	  else {
+		  HAL_GPIO_WritePin(IGNITION_LOGIC_GPIO_Port, IGNITION_LOGIC_Pin, GPIO_PIN_RESET);
+	  }
+
+	  /* Reading Ignition Switch Signal */
+	  ignition_status = HAL_GPIO_ReadPin(IGNITION_SIGNAL_GPIO_Port, IGNITION_SIGNAL_Pin);
+
+	  /* Power Management */
+	  if(ignition_status == 0){
+	  		  //Use Battery
+	  		  power_sel = 1;
+	  		  HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_SET);
+	  	  }
+	  	  else{ //Ignition On
+	  		  //Always use Accu
+	  		  power_sel = 0;
+	  		  HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_RESET);
+	  		  /* Check Accu Level */
+	  		  	  if((MAFiltAccu.out > ACCU_THRESHOLD)&&(MAFiltBatt.out < BATT_THRESHOLD)) {
+	  		  		  //Start Charging
+	  		  		  //Set Charging Signal High
+	  		  		  charging = 1;
+	  		  		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
+	  		  	  }
+	  		  	  else { // No charging
+	  		  		  charging = 0;
+	  		  		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
+	  		  	  }
+	  	  }
+	  /* End of Power Management */
+
 //	  memset(txBuffer,0,sizeof(txBuffer));
 	  /*
 	  sprintf(txBuffer,"\nID : %x-%x-%x-%x Ignition : %d SEL : %d CHRG : %d Lat : %.6lf Lon :%.6lf Ax = %.2f Ay = %.2f Az = %.2f V : %.2f Fuel : %.2f Accu : %.2f Batt : %.2f ",
@@ -847,7 +868,7 @@ void MainProcess(void *argument)
 //
 //	  HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
 //	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
-    osDelay(10);
+    osDelay(100);
   }
   /* USER CODE END 5 */
 }
@@ -1329,77 +1350,6 @@ void ADCProcesing(void *argument)
   /* USER CODE END ADCProcesing */
 }
 
-/* USER CODE BEGIN Header_PowManagement */
-/**
-* @brief Function implementing the PowerManagement thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_PowManagement */
-void PowManagement(void *argument)
-{
-  /* USER CODE BEGIN PowManagement */
-	HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
-  /* Infinite loop */
-  for(;;)
-  {
-	  /**/
-	  if(ignition_status == 0){
-		  //Use Battery
-		  power_sel = 1;
-		  HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_SET);
-	  }
-	  else{ //Ignition On
-		  //Always use Accu
-		  power_sel = 0;
-		  HAL_GPIO_WritePin(POWER_SEL_GPIO_Port, POWER_SEL_Pin, GPIO_PIN_RESET);
-		  /* Check Accu Level */
-		  	  if((MAFiltAccu.out > ACCU_THRESHOLD)&&(MAFiltBatt.out < BATT_THRESHOLD)) {
-		  		  //Start Charging
-		  		  //Set Charging Signal High
-		  		  charging = 1;
-		  		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
-		  	  }
-		  	  else { // No charging
-		  		  charging = 0;
-		  		  HAL_GPIO_WritePin(CHARGING_SIGNAL_GPIO_Port, CHARGING_SIGNAL_Pin, GPIO_PIN_RESET);
-		  	  }
-	  }
-    osDelay(100);
-  }
-  /* USER CODE END PowManagement */
-}
-
-/* USER CODE BEGIN Header_Ignition */
-/**
-* @brief Function implementing the IgnitionTask thread.
-* @param argument: Not used
-* @retval None
-*/
-/* USER CODE END Header_Ignition */
-void Ignition(void *argument)
-{
-  /* USER CODE BEGIN Ignition */
-  /* Infinite loop */
-  for(;;)
-  {
-	/* Setting Ignition Switch Logic*/
-	if(identification == 1){
-		//Set Ignition Logic
-		HAL_GPIO_WritePin(IGNITION_LOGIC_GPIO_Port, IGNITION_LOGIC_Pin, GPIO_PIN_SET);
-	}
-	else {
-		HAL_GPIO_WritePin(IGNITION_LOGIC_GPIO_Port, IGNITION_LOGIC_Pin, GPIO_PIN_RESET);
-	}
-
-	/* Reading Ignition Switch Signal */
-	ignition_status = HAL_GPIO_ReadPin(IGNITION_SIGNAL_GPIO_Port, IGNITION_SIGNAL_Pin);
-    osDelay(200);
-  }
-  /* USER CODE END Ignition */
-}
-
 /* USER CODE BEGIN Header_LoggingData */
 /**
 * @brief Function implementing the LoggingDataTask thread.
@@ -1410,8 +1360,12 @@ void Ignition(void *argument)
 void LoggingData(void *argument)
 {
   /* USER CODE BEGIN LoggingData */
+
 	uint8_t index = 0;
-//	char txBuffer[100];
+	char txBuffer[100];
+	memset(txBuffer,0,sizeof(txBuffer));
+	sprintf(txBuffer,"Starting Logging..\n");
+	HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer , sizeof(txBuffer), 100);
   /* Infinite loop */
   for(;;)
   {
@@ -1426,12 +1380,14 @@ void LoggingData(void *argument)
 	log_batt[index] = MAFiltBatt.out;
 	log_ignition_status[index] = ignition_status;
 
+	memset(txBuffer,0,sizeof(txBuffer));
+	sprintf(txBuffer,"index : %d\n", index);
+	HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer , sizeof(txBuffer), 100);
 	//Increment Index
 	index++;
-	if(index > LOG_LENGTH){
-		//Create Payload Form
-		xTaskNotifyGive(SendDataTaskHandle);
-		osMutexAcquire(mutexIMUHandle, portMAX_DELAY);
+	if(index >= LOG_LENGTH){
+
+//		osMutexAcquire(mutexIMUHandle, portMAX_DELAY);
 		index = 0;
 		//Add clearing array
 		imu_index = 0;
@@ -1439,10 +1395,18 @@ void LoggingData(void *argument)
 		speed_max = 0;
 		acc_avg = 0;
 		acc_max = 0;
-		osMutexRelease(mutexIMUHandle);
+		memset(txBuffer,0,sizeof(txBuffer));
+		sprintf(txBuffer,"FULL!\n");
+		HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer , sizeof(txBuffer), 100);
+//		osMutexRelease(mutexIMUHandle);
 		memset(payload,0,sizeof(payload)); //clearing form
-		sprintf(payload,"\"`{\\\"tw\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\":[\\\"%lf,%lf\\\",\\\"%lf,%lf\\\"],\\\"k_max\\\":[%.2f,%.2f],\\\"k_avg\\\":[%.2f,%.2f],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[%.2f,%.2f],\\\"a_avg\\\":[%.2f,%.2f],\\\"tb\\\":[%.2f,%.2f],\\\"ta\\\":[%.2f,%.2f],\\\"bb\\\":[%.2f,%.2f],\\\"si\\\":[%d,%d],\\\"kurir\\\":1}`\"",
+		//Create Payload Form
+		sprintf(payload,"`{\\\"tw\\\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\\\":[\\\"%f,%f\\\",\\\"%f,%f\\\"],\\\"k_max\\\":[%.2f,%.2f],\\\"k_avg\\\":[%.2f,%.2f],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[%.2f,%.2f],\\\"a_avg\\\":[%.2f,%.2f],\\\"tb\\\":[%.2f,%.2f],\\\"ta\\\":[%.2f,%.2f],\\\"bb\\\":[%.2f,%.2f],\\\"si\\\":[%d,%d],\\\"kurir\\\":1}`",
 				log_latitude[0],log_longitude[0], log_latitude[1], log_longitude[1], log_speed_max[0],log_speed_max[1],log_speed_avg[0],log_speed_avg[1],log_acc_max[0],log_acc_max[1], log_acc_avg[0], log_acc_avg[1], log_batt[0], log_batt[1], log_accu[0], log_accu[1],log_fuel[0], log_fuel[1], log_ignition_status[0], log_ignition_status[1]);
+
+
+//		sprintf(payload,"`{\\\"tw\\\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\\\":[\\\"-6.8385324382250205,107.6955557148961\\\",\\\"-6.828578043365432,107.6112333432733\\\"],\\\"k_max\\\":[43.99,55.65],\\\"k_avg\\\":[76.99,82.97],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[3.62,83.87],\\\"a_avg\\\":[91.39,62.66],\\\"tb\\\":[6.07,6.39],\\\"ta\\\":[5.10,1.99],\\\"bb\\\":[0.92,0.98],\\\"si\\\":[0,1],\\\"kurir\\\":1}`");
+		xTaskNotifyGive(SendDataTaskHandle);
 	}
 
 //	HAL_UART_Transmit(&huart2, (uint8_t*)payload, sizeof(payload), 100);
@@ -1452,7 +1416,7 @@ void LoggingData(void *argument)
 //						i,log_acc_avg[i],log_acc_max[i], log_speed_avg[i], log_speed_max[i]);
 //				HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
 //			}
-    osDelay(10*1000);
+    osDelay(pdMS_TO_TICKS(10*1000));
   }
   /* USER CODE END LoggingData */
 }
@@ -1466,44 +1430,54 @@ void LoggingData(void *argument)
 /* USER CODE END Header_SendData */
 void SendData(void *argument)
 {
+  /* USER CODE BEGIN SendData */
 	char txBuffer[50] ={};
-		char * topic = "client-1";
-	  /* USER CODE BEGIN SenData */
-		uint8_t error = 0;
-		error += SIM800_Init();
+	uint8_t pub_status = 1;
+	char * topic = "client-1";
+	uint8_t error = 0;
+	error += SIM800_Init();
 
-		if(error >0 ){
-			sprintf(txBuffer,"Initialization fail\n");
-		} else {
-			sprintf(txBuffer,"Initialization success\n");
-		}
-		HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
-		//Connecting to broker
-		error += MQTT_Connect("indosatgprs", "", "", "3.210.14.248", 1883, "faisa", "disadacepetlulus", "client-1", 1000);
+	if(error >0 ){
+		sprintf(txBuffer,"GSM Initialization fail\n");
+	} else {
+		sprintf(txBuffer,"GSM Initialization success\n");
+	}
+	HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
+	//Connecting to broker
+	error += MQTT_Connect("indosatgprs", "", "", "3.210.14.248", 1883, "faisa", "disadacepetlulus", "client-1", 1000);
 
+	memset(txBuffer,0,sizeof(txBuffer));
+	if(error >0 ){
 		memset(txBuffer,0,sizeof(txBuffer));
-
-		if(error >0 ){
-			  error = 0;
-		      error += SIM800_SendCommand("AT+RST=1\r\n", "READY\r\n", 1000);
-		  	  osDelay(pdMS_TO_TICKS(20*1000));
-		  	  error += MQTT_Connect("indosatgprs", "", "", "3.210.14.248", 1883, "faisa", "disadacepetlulus", "client-1", 1000);
-		  }
+		sprintf(txBuffer,"Reconnecting..\n");
 		HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
+		error = 0;
+		error += SIM800_SendCommand("AT+RST=1\r\n", "READY\r\n", 1000);
+		osDelay(pdMS_TO_TICKS(20*1000));
+		error += MQTT_Connect("indosatgprs", "", "", "3.210.14.248", 1883, "faisa", "disadacepetlulus", "client-1", 1000);
+	}
+	else {
+		memset(txBuffer,0,sizeof(txBuffer));
+		sprintf(txBuffer,"Connected..\n");
+		HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
+	}
 
+//	memset(payload,0,sizeof(payload));
+//	sprintf(payload,"`{\\\"tw\\\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\\\":[\\\"-6.8385324382250205,107.6955557148961\\\",\\\"-6.828578043365432,107.6112333432733\\\"],\\\"k_max\\\":[43.99,55.65],\\\"k_avg\\\":[76.99,82.97],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[3.62,83.87],\\\"a_avg\\\":[91.39,62.66],\\\"tb\\\":[6.07,6.39],\\\"ta\\\":[5.10,1.99],\\\"bb\\\":[0.92,0.98],\\\"si\\\":[0,1],\\\"kurir\\\":1}`");
+  /* Infinite loop */
+  for(;;)
+  {
+	  //Blocking Until Notified
+	  ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
+	  //Send Payload
+	  HAL_UART_Transmit(&huart2, (uint8_t *) payload , sizeof(payload), 100);
+	  pub_status = MQTT_Pub("client-1", payload);
+	  osDelay(pdMS_TO_TICKS(5000));
 
-	  /* Infinite loop */
-	  for(;;)
-	  {
-		  //Blocking Until Notified
-		  	ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
-		  	memset(txBuffer, 0, sizeof(txBuffer));
-		  	sprintf(txBuffer,"\nSending..");
-		  	HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
-		  //Send Payload
-		  	MQTT_Pub(topic, payload);
-	    osDelay(pdMS_TO_TICKS((5*1000)));
-	  }
+	  memset(txBuffer, 0, sizeof(txBuffer));
+	  sprintf(txBuffer,"Sending : %d\n", pub_status);
+	  HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
+  }
   /* USER CODE END SendData */
 }
 

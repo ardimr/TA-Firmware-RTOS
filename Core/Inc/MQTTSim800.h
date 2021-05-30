@@ -16,7 +16,7 @@
 #include "stm32f4xx_hal.h"
 // === CONFIG ===
 #define UART_SIM800 &huart6
-#define FREERTOS    0
+#define FREERTOS    1
 #define CMD_DELAY   1000
 // ==============
 
