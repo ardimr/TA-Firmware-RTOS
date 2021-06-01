@@ -79,11 +79,11 @@ Diskio_drvTypeDef  USER_Driver =
   */
 DSTATUS USER_initialize (
 	BYTE pdrv           /* Physical drive nmuber to identify the drive */
+
 )
 {
   /* USER CODE BEGIN INIT */
-    Stat = STA_NOINIT;
-    return Stat;
+	return USER_SPI_initialize(pdrv); //ADD THIS LINE
   /* USER CODE END INIT */
 }
 
@@ -97,8 +97,7 @@ DSTATUS USER_status (
 )
 {
   /* USER CODE BEGIN STATUS */
-    Stat = STA_NOINIT;
-    return Stat;
+	return USER_SPI_status(pdrv); //ADD THIS LINE
   /* USER CODE END STATUS */
 }
 
@@ -118,7 +117,7 @@ DRESULT USER_read (
 )
 {
   /* USER CODE BEGIN READ */
-    return RES_OK;
+	return USER_SPI_read(pdrv, buff, sector, count); //ADD THIS LINE
   /* USER CODE END READ */
 }
 
@@ -140,7 +139,7 @@ DRESULT USER_write (
 {
   /* USER CODE BEGIN WRITE */
   /* USER CODE HERE */
-    return RES_OK;
+	return USER_SPI_write(pdrv, buff, sector, count); //ADD THIS LINE
   /* USER CODE END WRITE */
 }
 #endif /* _USE_WRITE == 1 */
@@ -161,7 +160,7 @@ DRESULT USER_ioctl (
 {
   /* USER CODE BEGIN IOCTL */
     DRESULT res = RES_ERROR;
-    return res;
+    return USER_SPI_ioctl(pdrv, cmd, buff); //ADD THIS LINE
   /* USER CODE END IOCTL */
 }
 #endif /* _USE_IOCTL == 1 */

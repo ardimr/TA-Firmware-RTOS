@@ -108,7 +108,7 @@ const osThreadAttr_t RFIDTask_attributes = {
 osThreadId_t SDCardTaskHandle;
 const osThreadAttr_t SDCardTask_attributes = {
   .name = "SDCardTask",
-  .stack_size = 250 * 4,
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityHigh,
 };
 /* Definitions for ADCProcessingTa */
@@ -179,7 +179,9 @@ const osMutexAttr_t mutexIMU_attributes = {
 	FATFS FatFs; 	//Fatfs handle
 	FIL fil; 		//File handle
 	FRESULT fres; 	//Result after operations
-
+	//Let's get some statistics from the SD card
+	DWORD free_clusters, free_sectors, total_sectors;
+	FATFS* getFreeFs;
 	//Ignition Variables
 	uint8_t ignition_status = 0;
 	uint8_t ignition_logic = 0;
@@ -1220,15 +1222,13 @@ void SDCard(void *argument)
 {
   /* USER CODE BEGIN SDCard */
 	osMutexAcquire(MutexSPI1Handle, portMAX_DELAY);
+	osDelay(pdMS_TO_TICKS(2000));
 	//Open the file system
 	fres = f_mount(&FatFs, "", 1); //1=mount now
 	if (fres != FR_OK) {
 		myprintf("f_mount error (%i)\r\n", fres);
 		osMutexRelease(MutexSPI1Handle);
 	}
-	//Let's get some statistics from the SD card
-	DWORD free_clusters, free_sectors, total_sectors;
-    FATFS* getFreeFs;
 
     fres = f_getfree("", &free_clusters, &getFreeFs);
     if (fres != FR_OK) {
