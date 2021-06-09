@@ -22,6 +22,8 @@
 
 void Sim800_RxCallBack(void);
 
+void A9G_GetTime(char * time);
+
 int SIM800_SendCommand(char *command, char *reply, uint16_t delay);
 
 int SIM800_Init(void);

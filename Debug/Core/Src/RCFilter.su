@@ -1,4 +1,4 @@
 RCFilter.c:4:6:RCFilter_Init	32	static
 RCFilter.c:17:7:RCFilter_Update	16	static
 RCFilter.c:28:6:MovAvgFilter_init	24	static
-RCFilter.c:37:7:MovAvgFilter_Update	32	static
+RCFilter.c:37:7:MovAvgFilter_Update	24	static

@@ -51,7 +51,7 @@
 
 const uint16_t i2c_timeout = 100;
 const double Accel_Z_corrector = 14418.0;
-float scale_factor  = 0.0345;
+float scale_factor  = 0.0039;
 uint32_t timer;
 
 Kalman_t KalmanX = {
@@ -83,14 +83,14 @@ uint8_t MPU6050_Init(I2C_HandleTypeDef *I2Cx) {
         HAL_Delay(100);
 
         // Set DATA FORMAT
-        Data = 0x0B;
+        Data = 0x08;
         HAL_I2C_Mem_Write(I2Cx, MPU6050_ADDR, ADXL345_DATA_FORMAT_REG, 1, &Data, 1, i2c_timeout);
         HAL_Delay(100);
 
         // Get the current register contents, so we don't clobber the power bit
         HAL_I2C_Mem_Read(I2Cx, MPU6050_ADDR, ADXL345_BW_RATE_REG, 1, &registerContents, 1, i2c_timeout);
         registerContents &= 0x10;
-        registerContents |= ADXL345_3200HZ;
+        registerContents |= ADXL345_100HZ;
 
         // Set DATA RATE of 1KHz by writing SMPLRT_DIV register
         HAL_I2C_Mem_Write(I2Cx, MPU6050_ADDR, ADXL345_BW_RATE_REG, 1, &registerContents, 1, i2c_timeout);
@@ -136,9 +136,9 @@ void MPU6050_Read_Accel(I2C_HandleTypeDef *I2Cx, MPU6050_t *DataStruct) {
          I have configured FS_SEL = 0. So I am dividing by 16384.0
          for more details check ACCEL_CONFIG Register              ****/
 
-    DataStruct->Ax = DataStruct->Accel_X_RAW * scale_factor / GRAVITY;
-    DataStruct->Ay = DataStruct->Accel_Y_RAW * scale_factor / GRAVITY;
-    DataStruct->Az = DataStruct->Accel_Z_RAW * scale_factor / GRAVITY;
+    DataStruct->Ax = DataStruct->Accel_X_RAW * scale_factor ;
+    DataStruct->Ay = DataStruct->Accel_Y_RAW * scale_factor ;
+    DataStruct->Az = DataStruct->Accel_Z_RAW * scale_factor ;
 }
 
 

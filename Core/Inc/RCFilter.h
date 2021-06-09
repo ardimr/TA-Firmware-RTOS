@@ -1,7 +1,7 @@
 #ifndef RC_FILTER_H
 #define RC_FILTER_H
 
-#define BUFF_LENGTH 50
+#define BUFF_LENGTH 36
 typedef struct {
 	float coeff[2];
 	float out[2];

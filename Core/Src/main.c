@@ -27,6 +27,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include<stdbool.h>
 #include "mpu6050.h"
 #include "MFRC522.h"
 #include "integer_type.h"
@@ -45,13 +46,15 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define PI 3.14159265
+
 #define ADC_RESOLUTION 4096
 #define VOLTAGE_REFERENCE 3.3
 #define ACCU_THRESHOLD 12
 #define BATT_THRESHOLD 3.7
 
-#define IMU_TS 50
-#define GPS_TS 500
+#define IMU_TS 10
+#define GPS_TS 2000
 
 #define ACC_BUFF_LEN 100
 #define SPEED_BUFF_LEN 100
@@ -109,7 +112,7 @@ osThreadId_t SDCardTaskHandle;
 const osThreadAttr_t SDCardTask_attributes = {
   .name = "SDCardTask",
   .stack_size = 1024 * 4,
-  .priority = (osPriority_t) osPriorityHigh,
+  .priority = (osPriority_t) osPriorityHigh2,
 };
 /* Definitions for ADCProcessingTa */
 osThreadId_t ADCProcessingTaHandle;
@@ -147,12 +150,21 @@ const osMutexAttr_t mutexIMU_attributes = {
 
 	//IMU Variable
 	MPU6050_t MPU6050;
-	float speed;
+	const float ref_range = 2;
+	const float ref_low = -1;
+	const float raw_low_x = -1.02;
+	const float raw_low_y = -1.04;
+	const float raw_low_z = -1.17;
+	const float raw_high_x = 1.06;
+	const float raw_high_y = 1.1;
+	const float raw_high_z = 0.83;
+	double speed;
 	float acc_buff[ACC_BUFF_LEN];
-	double acc;
-	float acc_max, acc_avg;
-	float speed_max, speed_avg;
+	double acc, pitch, roll;
+	double acc_max, acc_avg;
+	double speed_max, speed_avg;
 	uint16_t imu_index;
+	MovAvgFilter MFiltAx, MFiltAy, MFiltAz;
 
 	MatrixTransform MatrixTranform;
 	//RFID Variable
@@ -201,8 +213,15 @@ const osMutexAttr_t mutexIMU_attributes = {
 	float log_accu[LOG_LENGTH] = {};
 	float log_batt[LOG_LENGTH] = {};
 	uint8_t log_ignition_status [LOG_LENGTH] = {};
+	char log_timestamp[LOG_LENGTH][32] = {};
 
 
+	//GSM
+	extern char answer[32];
+	extern bool x;
+	uint16_t queue = 0;
+	//Timestamp
+	char timestamp[32] = {};
 	//Payload
 	char payload[4096];
 
@@ -243,6 +262,13 @@ int nmea0183_checksum(char *msg) {
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart == UART_SIM800) {
 		Sim800_RxCallBack();
+		if(x){
+			if(strstr(answer,"CCLK")!=NULL){
+				memset(timestamp,0,sizeof(timestamp));
+				//copy answer to timestamp
+				memcpy(timestamp,answer,sizeof(answer));
+			}
+		}
 	} else {
 		flag = 1; //GPS Flag
 	}
@@ -807,9 +833,10 @@ void MainProcess(void *argument)
   /* Infinite loop */
   for(;;)
   {
+	  xTaskNotifyGive(IMUTaskHandle);
 	  //Identification Check
 	  if ((identification == 1)&&(ignition_status == 1)){
-		  xTaskNotifyGive(IMUTaskHandle);
+//		  xTaskNotifyGive(IMUTaskHandle);
 	  } else {
 		  //Reset IMU Reading
 		  MPU6050.Ax = 0;
@@ -870,7 +897,7 @@ void MainProcess(void *argument)
 //
 //	  HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
 //	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
-    osDelay(100);
+    osDelay(10);
   }
   /* USER CODE END 5 */
 }
@@ -886,17 +913,22 @@ void IMU(void *argument)
 {
   /* USER CODE BEGIN IMU */
 	char txBuffer[100]= {};
+	double ax,ay,az;
+	//Clearing Buffer
+	memset(txBuffer,0,sizeof(txBuffer));
 	sprintf(txBuffer, "Running IMU Task..\n");
-//	float vel[3] = {0,0,0};
 	uint8_t ID = MPU6050_Init(&hi2c1);
-	sprintf(txBuffer,"Id : %d Initialization Success .. \n", ID);
+	sprintf(txBuffer,"IMU Initialization Success : %d \n", ID);
 	HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
 
 	//Init Matrix Transformation
 	MatrixTransformInit(&MatrixTranform);
-	//Clearing Buffer
-	memset(txBuffer,0,sizeof(txBuffer));
-	osDelay(200);
+	//init filter
+	MovAvgFilter_init(&MFiltAy);
+	MovAvgFilter_init(&MFiltAy);
+	MovAvgFilter_init(&MFiltAz);
+
+	osDelay(pdMS_TO_TICKS(1000));
   /* Infinite loop */
   for(;;)
   {
@@ -904,17 +936,41 @@ void IMU(void *argument)
 	//Blocking Until Notified
 	ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
 	MPU6050_Read_Accel(&hi2c1, &MPU6050);
+	MovAvgFilter_Update(&MFiltAx, MPU6050.Ax);
+	MovAvgFilter_Update(&MFiltAy, MPU6050.Ay);
+	MovAvgFilter_Update(&MFiltAz, MPU6050.Az);
+
+	//Corrected Value
+	ax = ((MFiltAx.out-raw_low_x)*ref_range)/(raw_high_x-raw_low_x)+ ref_low;
+	ay = ((MFiltAy.out-raw_low_y)*ref_range)/(raw_high_y-raw_low_y)+ ref_low;
+	az = ((MFiltAz.out-raw_low_z)*ref_range)/(raw_high_z-raw_low_z)+ ref_low;
+
 	//Frame Transformation
-	acc = MPU6050.Ax * MatrixTranform.x[0] + MPU6050.Ay * MatrixTranform.x[1]+MPU6050.Az*MatrixTranform.x[2];
+	ax = (round(((0.9982 * ax - 0.0012*ay + 0.0593*az)*100)))/100.0;
+	ay = (round(((-0.0012* ax + 0.9992*ay + 0.0395*az)*100)))/100.0;
+	az = (round(((-0.0593* ax - 0.0395*ay + 0.9975*az)*100)))/100.0;
+
+	//Calculate Pitch
+	roll = round((atan(-ay/sqrt(ax*ax+az*az))*180/PI))*PI/180;
+//	roll = round((atan(-MFiltAy.out/sqrt(MFiltAx.out*MFiltAx.out+MFiltAz.out*MFiltAz.out))*180/PI))*PI/180;
+	pitch = atan(-ax/sqrt(ay*ay+az*az));
+
+	if((roll>-(PI/18))&&(roll<(PI/18))){
+		roll = 0;
+	}
+	//choose axis
+	acc = -1*(ay + sin(roll));
+
 
 	//Calculate Speed
+	speed += acc* GRAVITY*IMU_TS *0.001 *3.6;
+
 	/*
 	vel[0] += MPU6050.Ax * IMU_TS * 0.001; //Vx TS in MS
 	vel[1] += MPU6050.Ay * IMU_TS * 0.001; //Vy
 	vel[2] += (MPU6050.Az - 5.52) * IMU_TS * 0.001; //Vz
 	speed = sqrt(pow(vel[0],2) + pow(vel[1],2) + pow(vel[2],2));
 	*/
-	speed += acc * IMU_TS *0.001;
 	osMutexAcquire(mutexIMUHandle, portMAX_DELAY);
 
 	imu_index++;
@@ -934,9 +990,10 @@ void IMU(void *argument)
 	osMutexRelease(mutexIMUHandle);
 
 //	speed = CalSpeed(MPU6050, IMU_TS);
-//	sprintf(txBuffer,"Ax = %.2f Ay = %.2f Az = %.2f\n", MPU6050.Ax, MPU6050.Ay, MPU6050.Az );
-//	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
-    osDelay(IMU_TS);
+	memset(txBuffer,0,sizeof(txBuffer));
+	sprintf(txBuffer,"roll = %.2f ay = %.2f acc = %.2f acc_max = %.2f v = %.2f  v_avg = %.2f\n",roll *180.0/PI, ay, acc,acc_max,speed, speed_avg);
+	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
+    osDelay(pdMS_TO_TICKS(IMU_TS));
   }
   /* USER CODE END IMU */
 }
@@ -984,11 +1041,12 @@ void GPS(void *argument)
 
 	  HAL_UART_Receive_DMA(&huart1, buff, 255);
 
-	  HAL_UART_Transmit(&huart2, (unsigned char *) "Start\n", 6, 500);
+	  osDelay(pdMS_TO_TICKS(5000));
+//	  HAL_UART_Transmit(&huart2, (unsigned char *) "Start\n", 6, 500);
   /* Infinite loop */
   for(;;)
   {
-//	  char txBuffer[200] = {};
+	  char txBuffer[200] = {};
 	  if (flag) {
 	  	memset(buffStr, 0, 255);
 	  	sprintf(buffStr, "%s", buff);
@@ -1114,10 +1172,10 @@ void GPS(void *argument)
 	  				strcat(strUTC, sS);
 	  				strUTC[8] = '\0';
 
-	  				/*memset(txBuffer,0,sizeof(txBuffer));
-	  				sprintf(txBuffer, "Latitude : %f Longitude : %f UTC : %s\n",latitude,longitude, strUTC);
+	  				memset(txBuffer,0,sizeof(txBuffer));
+	  				sprintf(txBuffer, "GPS Available..\n");
 	  				HAL_UART_Transmit(&huart2, (unsigned char *)txBuffer, sizeof(txBuffer), 100);
-					*/
+
 	  			} //end of the chekcsum data verification
 	  		} //end of %GPPGA Sentences selection
 	  	}// end of splotting the buffstr by the "\n" delimiter with strsep() c function
@@ -1132,14 +1190,15 @@ void GPS(void *argument)
 	  	prev_longitude = longitude;
 	  }
 	  else {
-		  GPS_distance = 0;
-		  latitude = 0;
-		  longitude = 0;
-		  GPS_speed = 0;
-//		  sprintf(txBuffer," GPS no signal..");
-//		  HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer, sizeof(txBuffer), 100);
+//		  GPS_distance = 0;
+//		  latitude = 0;
+//		  longitude = 0;
+//		  GPS_speed = 0;
+		  memset(txBuffer,0,sizeof(txBuffer));
+		  sprintf(txBuffer,"GPS no signal..\n");
+		  HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer, sizeof(txBuffer), 100);
 	  }
-	  osDelay(GPS_TS);
+	  osDelay(pdMS_TO_TICKS(GPS_TS));
   }
   /* USER CODE END GPS */
 }
@@ -1164,17 +1223,18 @@ void RFID(void *argument)
 	MFRC522_Init();
 	status = 0;
 
-	while (status == 0){
+	while (status != 0x92){
 		status = Read_MFRC522(VersionReg);
-		sprintf(txBuffer,"Running RC522 ver :%x\n", status);
-		HAL_UART_Transmit(&huart2, (unsigned char*) txBuffer, sizeof(txBuffer), 5000);
-		osDelay(100);
+		status = 0x92;
+//		sprintf(txBuffer,"Running RC522 ver :%x\n", status);
+//		HAL_UART_Transmit(&huart2, (unsigned char*) txBuffer, sizeof(txBuffer), 5000);
+//		osDelay(pdMS_TO_TICKS(1000));
 	}
 	osMutexRelease(MutexSPI1Handle);
 	//Printing to PC
 	memset(txBuffer,0,sizeof(txBuffer));
 	status = 0;
-	osDelay(200);
+	osDelay(pdMS_TO_TICKS(1000));
   /* Infinite loop */
   for(;;)
   {
@@ -1240,24 +1300,31 @@ void SDCard(void *argument)
     total_sectors = (getFreeFs->n_fatent - 2) * getFreeFs->csize;
     free_sectors = free_clusters * getFreeFs->csize;
 
-    myprintf("SD card stats:\r\n%10lu KiB total drive space.\r\n%10lu KiB available.\r\n", total_sectors / 2, free_sectors / 2);
+//    myprintf("SD card stats:\r\n%10lu KiB total drive space.\r\n%10lu KiB available.\r\n", total_sectors / 2, free_sectors / 2);
 
     //Now let's try to open file "test.txt"
-    fres = f_open(&fil, "tesjson.txt", FA_READ);
+    fres = f_open(&fil, "write.txt", FA_READ);
     if (fres != FR_OK) {
     	myprintf("f_open error (%i)\r\n");
     	osMutexRelease(MutexSPI1Handle);
+    }else {
+//    	myprintf("I was able to open 'tesjson.txt' for reading!\r\n");
     }
-    myprintf("I was able to open 'tesjson.txt' for reading!\r\n");
+
 
     //Read 30 bytes from "test.txt" on the SD card
     BYTE readBuf[100];
 
+    //Name File Format
+    char folder_name[10] ="logging/";
+    char front_name [10] = "data";
+    char back_name [20] = {};
+    char filename [50] = {};
     //We can either use f_read OR f_gets to get data out of files
     //f_gets is a wrapper on f_read that does some string formatting for us
     TCHAR* rres = f_gets((TCHAR*)readBuf, 100, &fil);
     if(rres != 0) {
-    	myprintf("Read string from 'tesjson.txt'' contents: %s\r\n", readBuf);
+//    	myprintf("Read string from 'tesjson.txt'' contents: %s\r\n", readBuf);
     } else {
     	myprintf("f_gets error (%i)\r\n", fres);
     }
@@ -1268,7 +1335,7 @@ void SDCard(void *argument)
     //Now let's try and write a file "write.txt"
     fres = f_open(&fil, "write.txt", FA_WRITE | FA_OPEN_ALWAYS | FA_CREATE_ALWAYS);
     if(fres == FR_OK) {
-    	myprintf("I was able to open 'write.txt' for writing\r\n");
+//    	myprintf("I was able to open 'write.txt' for writing\r\n");
     } else {
     	myprintf("f_open error (%i)\r\n", fres);
     }
@@ -1281,7 +1348,7 @@ void SDCard(void *argument)
     UINT bytesWrote;
     fres = f_write(&fil, readBuf, length_var, &bytesWrote);
     if(fres == FR_OK) {
-    	myprintf("Wrote %i bytes to 'write.txt'!\r\n", bytesWrote);
+//    	myprintf("Wrote %i bytes to 'write.txt'!\r\n", bytesWrote);
     } else {
     	myprintf("f_write error (%i)\r\n");
     }
@@ -1295,9 +1362,50 @@ void SDCard(void *argument)
   /* Infinite loop */
   for(;;)
   {
+	 //Wait notification from Send Data Task
 	 ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
+	 myprintf("Saving in ");
+	 //Acquire Mutex
+	 osMutexAcquire(MutexSPI1Handle, portMAX_DELAY);
+	 //Mounting SD Card
+	 fres = f_mount(&FatFs, "", 1); //1=mount now
+	 if (fres != FR_OK) {
+		 myprintf("f_mount error (%i)\r\n", fres);
+		 osMutexRelease(MutexSPI1Handle);
+	 }
 
-    osDelay(1);
+	 //Determine filename
+	 //Clearing buffer
+	 memset(filename,0,sizeof(filename));
+	 memset(back_name,0,sizeof(back_name));
+	 //write folder name first
+	 sprintf(filename,"%s",folder_name);
+	 //write back_name in buffer
+	 sprintf(back_name, "_%d.txt",queue);
+	 //Concatenate foldername and front name
+	 strcat(filename,front_name);
+	 //concatenate filename and back_name
+	 strcat(filename,back_name);
+	 myprintf("filename : %s\n", filename);
+	 fres = f_open(&fil, filename, FA_WRITE | FA_OPEN_ALWAYS | FA_CREATE_ALWAYS);
+	 if (fres != FR_OK) {
+		 myprintf("f_open error (%i)\r\n");
+		 osMutexRelease(MutexSPI1Handle);
+	 } else {
+		 //Write File
+		 fres = f_write(&fil, payload, strlen(payload), &bytesWrote);
+		 if(fres == FR_OK) {
+		 //    	myprintf("Wrote %i bytes to 'write.txt'!\r\n", bytesWrote);
+		 } else {
+			 myprintf("f_write error (%i)\r\n");
+		 }
+		 //Closing File
+		 f_close(&fil);
+	 }
+	 //We're done, so de-mount the drive
+	 f_mount(NULL, "", 0);
+	 osMutexRelease(MutexSPI1Handle);
+    osDelay(pdMS_TO_TICKS(100));
   }
   /* USER CODE END SDCard */
 }
@@ -1331,7 +1439,7 @@ void ADCProcesing(void *argument)
 	HAL_ADC_Start_DMA(&hadc1, buffer, 3);
 	sprintf(txBuffer,"ADC Intialization Success..\n");
 	HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), HAL_MAX_DELAY);
-	osDelay(100);
+	osDelay(pdMS_TO_TICKS(1000));
   /* Infinite loop */
   for(;;)
   {
@@ -1366,9 +1474,11 @@ void LoggingData(void *argument)
 	memset(txBuffer,0,sizeof(txBuffer));
 	sprintf(txBuffer,"Starting Logging..\n");
 	HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer , sizeof(txBuffer), 100);
+	osDelay(pdMS_TO_TICKS(1000));
   /* Infinite loop */
   for(;;)
   {
+	SIM800_SendCommand("AT+CCLK?\r\n", "OK\r\n", CMD_DELAY);
 	log_acc_avg[index] = acc_avg;
 	log_acc_max[index] = acc_max;
 	log_speed_max[index] = speed_max;
@@ -1379,30 +1489,35 @@ void LoggingData(void *argument)
 	log_accu[index] = MAFiltAccu.out;
 	log_batt[index] = MAFiltBatt.out;
 	log_ignition_status[index] = ignition_status;
+//	A9G_GetTime(log_timestamp[index]);
 
+	memset(log_timestamp[index], 0, sizeof(log_timestamp[index]));
+	memcpy(log_timestamp[index], &timestamp[8], 20);
+	// Change timezone to UTC
+	log_timestamp[index][19] = '0';
 	memset(txBuffer,0,sizeof(txBuffer));
-	sprintf(txBuffer,"index : %d\n", index);
+	sprintf(txBuffer,"index : %d Timestamp: %s\n", index, log_timestamp[index]);
 	HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer , sizeof(txBuffer), 100);
 	//Increment Index
 	index++;
 	if(index >= LOG_LENGTH){
 
-//		osMutexAcquire(mutexIMUHandle, portMAX_DELAY);
 		index = 0;
 		//Add clearing array
+		osMutexAcquire(mutexIMUHandle, portMAX_DELAY);
 		imu_index = 0;
 		speed_avg = 0;
 		speed_max = 0;
 		acc_avg = 0;
 		acc_max = 0;
-		memset(txBuffer,0,sizeof(txBuffer));
-		sprintf(txBuffer,"FULL!\n");
-		HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer , sizeof(txBuffer), 100);
-//		osMutexRelease(mutexIMUHandle);
+//		memset(txBuffer,0,sizeof(txBuffer));
+//		sprintf(txBuffer,"FULL! v_avg = %.2f\n", speed_avg);
+//		HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer , sizeof(txBuffer), 100);
+		osMutexRelease(mutexIMUHandle);
 		memset(payload,0,sizeof(payload)); //clearing form
 		//Create Payload Form
-		sprintf(payload,"`{\\\"tw\\\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\\\":[\\\"%f,%f\\\",\\\"%f,%f\\\"],\\\"k_max\\\":[%.2f,%.2f],\\\"k_avg\\\":[%.2f,%.2f],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[%.2f,%.2f],\\\"a_avg\\\":[%.2f,%.2f],\\\"tb\\\":[%.2f,%.2f],\\\"ta\\\":[%.2f,%.2f],\\\"bb\\\":[%.2f,%.2f],\\\"si\\\":[%d,%d],\\\"kurir\\\":1}`",
-				log_latitude[0],log_longitude[0], log_latitude[1], log_longitude[1], log_speed_max[0],log_speed_max[1],log_speed_avg[0],log_speed_avg[1],log_acc_max[0],log_acc_max[1], log_acc_avg[0], log_acc_avg[1], log_batt[0], log_batt[1], log_accu[0], log_accu[1],log_fuel[0], log_fuel[1], log_ignition_status[0], log_ignition_status[1]);
+		sprintf(payload,"`{\\\"tw\\\":[\\\"%s\\\",\\\"%s\\\"],\\\"lk\\\":[\\\"%f,%f\\\",\\\"%f,%f\\\"],\\\"k_max\\\":[%.2f,%.2f],\\\"k_avg\\\":[%.2f,%.2f],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[%.2f,%.2f],\\\"a_avg\\\":[%.2f,%.2f],\\\"tb\\\":[%.2f,%.2f],\\\"ta\\\":[%.2f,%.2f],\\\"bb\\\":[%.2f,%.2f],\\\"si\\\":[%d,%d],\\\"kurir\\\":1}`",
+				log_timestamp[0], log_timestamp[1], log_latitude[0],log_longitude[0], log_latitude[1], log_longitude[1], log_speed_max[0],log_speed_max[1],log_speed_avg[0],log_speed_avg[1],log_acc_max[0],log_acc_max[1], log_acc_avg[0], log_acc_avg[1], log_batt[0], log_batt[1], log_accu[0], log_accu[1],log_fuel[0], log_fuel[1], log_ignition_status[0], log_ignition_status[1]);
 
 
 //		sprintf(payload,"`{\\\"tw\\\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\\\":[\\\"-6.8385324382250205,107.6955557148961\\\",\\\"-6.828578043365432,107.6112333432733\\\"],\\\"k_max\\\":[43.99,55.65],\\\"k_avg\\\":[76.99,82.97],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[3.62,83.87],\\\"a_avg\\\":[91.39,62.66],\\\"tb\\\":[6.07,6.39],\\\"ta\\\":[5.10,1.99],\\\"bb\\\":[0.92,0.98],\\\"si\\\":[0,1],\\\"kurir\\\":1}`");
@@ -1461,7 +1576,7 @@ void SendData(void *argument)
 		sprintf(txBuffer,"Connected..\n");
 		HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
 	}
-
+	osDelay(pdMS_TO_TICKS(1000));
 //	memset(payload,0,sizeof(payload));
 //	sprintf(payload,"`{\\\"tw\\\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\\\":[\\\"-6.8385324382250205,107.6955557148961\\\",\\\"-6.828578043365432,107.6112333432733\\\"],\\\"k_max\\\":[43.99,55.65],\\\"k_avg\\\":[76.99,82.97],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[3.62,83.87],\\\"a_avg\\\":[91.39,62.66],\\\"tb\\\":[6.07,6.39],\\\"ta\\\":[5.10,1.99],\\\"bb\\\":[0.92,0.98],\\\"si\\\":[0,1],\\\"kurir\\\":1}`");
   /* Infinite loop */
@@ -1470,13 +1585,17 @@ void SendData(void *argument)
 	  //Blocking Until Notified
 	  ulTaskNotifyTake( pdTRUE, portMAX_DELAY );
 	  //Send Payload
-	  HAL_UART_Transmit(&huart2, (uint8_t *) payload , sizeof(payload), 100);
-	  pub_status = MQTT_Pub("client-1", payload);
-	  osDelay(pdMS_TO_TICKS(5000));
-
+//	  HAL_UART_Transmit(&huart2, (uint8_t *) payload , sizeof(payload), 100);
+	  pub_status = MQTT_Pub(topic, payload);
 	  memset(txBuffer, 0, sizeof(txBuffer));
 	  sprintf(txBuffer,"Sending : %d\n", pub_status);
 	  HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
+	  if(pub_status!=0){
+		  //Sending Fail
+		  queue++;
+//		  xTaskNotifyGive(SDCardTaskHandle);
+	  }
+	  osDelay(pdMS_TO_TICKS(5000));
   }
   /* USER CODE END SendData */
 }

@@ -5,3 +5,4 @@ MQTTSim800.c:137:5:SIM800_Init	16	static
 MQTTSim800.c:158:5:MQTT_Connect	312	static
 MQTTSim800.c:194:5:MQTT_Pub	4120	static
 MQTTSim800.c:217:5:MQTT_PingReq	4	static
+MQTTSim800.c:228:6:A9G_GetTime	24	static

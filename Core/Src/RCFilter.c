@@ -45,8 +45,6 @@ float MovAvgFilter_Update(MovAvgFilter *filter, float input){
 	sum += input;
 
 	/*Calculating the average*/
-	float avg = sum/BUFF_LENGTH;
-	filter -> out = avg;
-
+	filter -> out = sum/BUFF_LENGTH;
 	return filter -> out;
 }

@@ -224,3 +224,13 @@ int MQTT_PingReq(void) {
 //    return error;
 	return 0;
 }
+
+void A9G_GetTime(char * time){
+	SIM800_SendCommand("AT+CCLK?\r\n", "OK\r\n", CMD_DELAY);
+	if(strstr(answer,"CCLK")!=NULL){
+				HAL_UART_Transmit(&huart2, (uint8_t*)answer, sizeof(answer), 100);
+					memset(time,0,sizeof(time));
+					//copy answer to timestamp
+					memcpy(time, answer, sizeof(answer));
+				}
+}
