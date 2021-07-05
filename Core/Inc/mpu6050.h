@@ -66,6 +66,24 @@
 #define GRAVITY 9.80665
 extern float scale_factor;
 
+
+//ITG3205
+#define ITG3205_ADDR       0x68 << 1
+#define ITG3205_WHO_AM_I   0x00
+#define ITG3205_SMPLRT     0x15
+#define ITG3205_DLPFS      0x16
+#define ITG3205_INT_CFG    0x17
+#define ITG3205_INT_STATUS 0x1A
+#define ITG3205_PWRM       0x3E
+
+#define ITG3205_XMSB       0x1D
+#define ITG3205_XLSB       0x1E
+#define ITG3205_YMSB       0x1F
+#define ITG3205_YLSB       0x20
+#define ITG3205_ZMSB       0x21
+#define ITG3205_ZLSB       0x22
+
+
 // MPU6050 structure
 typedef struct {
 

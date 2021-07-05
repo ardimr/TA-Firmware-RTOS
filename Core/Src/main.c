@@ -54,11 +54,14 @@
 #define BATT_THRESHOLD 3.7
 
 #define IMU_TS 10
-#define GPS_TS 2000
+#define GPS_TS 1000
 
 #define ACC_BUFF_LEN 100
 #define SPEED_BUFF_LEN 100
 #define LOG_LENGTH 2
+
+#define pdTICKSTOMS( xTicks )    ( ( xTicks * 1000 ) / configTICK_RATE_HZ )
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -165,6 +168,7 @@ const osMutexAttr_t mutexIMU_attributes = {
 	double speed_max, speed_avg;
 	uint16_t imu_index;
 	MovAvgFilter MFiltAx, MFiltAy, MFiltAz;
+	MovAvgFilter MFiltGx, MFiltGy, MFiltGz;
 
 	MatrixTransform MatrixTranform;
 	//RFID Variable
@@ -186,7 +190,7 @@ const osMutexAttr_t mutexIMU_attributes = {
 	uint32_t buffer[3];
 	RCFilter rcFiltFuel, rcFiltAccu, rcFiltBatt;
 	MovAvgFilter MAFiltFuel, MAFiltAccu, MAFiltBatt;
-
+	float result_fuel = 0;
 	//SD Card Variables
 	FATFS FatFs; 	//Fatfs handle
 	FIL fil; 		//File handle
@@ -205,6 +209,7 @@ const osMutexAttr_t mutexIMU_attributes = {
 	//Logging Data Variables
 	float log_acc_max[LOG_LENGTH] = {};
 	float log_acc_avg[LOG_LENGTH] = {};
+	float log_gyro[LOG_LENGTH] = {};
 	float log_speed_max[LOG_LENGTH] = {};
 	float log_speed_avg[LOG_LENGTH] = {};
 	double log_latitude[LOG_LENGTH] = {};
@@ -404,28 +409,28 @@ int main(void)
 
   /* Create the thread(s) */
   /* creation of MainProcessTask */
-  MainProcessTaskHandle = osThreadNew(MainProcess, NULL, &MainProcessTask_attributes);
+//  MainProcessTaskHandle = osThreadNew(MainProcess, NULL, &MainProcessTask_attributes);
 
   /* creation of IMUTask */
-  IMUTaskHandle = osThreadNew(IMU, NULL, &IMUTask_attributes);
+//  IMUTaskHandle = osThreadNew(IMU, NULL, &IMUTask_attributes);
 
   /* creation of GPSTask */
   GPSTaskHandle = osThreadNew(GPS, NULL, &GPSTask_attributes);
 
   /* creation of RFIDTask */
-  RFIDTaskHandle = osThreadNew(RFID, NULL, &RFIDTask_attributes);
+//  RFIDTaskHandle = osThreadNew(RFID, NULL, &RFIDTask_attributes);
 
   /* creation of SDCardTask */
-  SDCardTaskHandle = osThreadNew(SDCard, NULL, &SDCardTask_attributes);
+//  SDCardTaskHandle = osThreadNew(SDCard, NULL, &SDCardTask_attributes);
 
   /* creation of ADCProcessingTa */
-  ADCProcessingTaHandle = osThreadNew(ADCProcesing, NULL, &ADCProcessingTa_attributes);
+//  ADCProcessingTaHandle = osThreadNew(ADCProcesing, NULL, &ADCProcessingTa_attributes);
 
   /* creation of LoggingDataTask */
-  LoggingDataTaskHandle = osThreadNew(LoggingData, NULL, &LoggingDataTask_attributes);
+//  LoggingDataTaskHandle = osThreadNew(LoggingData, NULL, &LoggingDataTask_attributes);
 
   /* creation of SendDataTask */
-  SendDataTaskHandle = osThreadNew(SendData, NULL, &SendDataTask_attributes);
+//  SendDataTaskHandle = osThreadNew(SendData, NULL, &SendDataTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -839,9 +844,9 @@ void MainProcess(void *argument)
 //		  xTaskNotifyGive(IMUTaskHandle);
 	  } else {
 		  //Reset IMU Reading
-		  MPU6050.Ax = 0;
-		  MPU6050.Ay = 0;
-		  MPU6050.Az = 0;
+//		  MPU6050.Ax = 0;
+//		  MPU6050.Ay = 0;
+//		  MPU6050.Az = 0;
 	  }
 	  if(UID[0]== 0x29){ // Need to add driver database
 		  identification = 1;
@@ -886,15 +891,13 @@ void MainProcess(void *argument)
 	  	  }
 	  /* End of Power Management */
 
-//	  memset(txBuffer,0,sizeof(txBuffer));
+	  memset(txBuffer,0,sizeof(txBuffer));
 	  /*
 	  sprintf(txBuffer,"\nID : %x-%x-%x-%x Ignition : %d SEL : %d CHRG : %d Lat : %.6lf Lon :%.6lf Ax = %.2f Ay = %.2f Az = %.2f V : %.2f Fuel : %.2f Accu : %.2f Batt : %.2f ",
 			  UID[0],UID[1],UID[2],UID[3], ignition_status, power_sel, charging,latitude,longitude, MPU6050.Ax, MPU6050.Ay,MPU6050.Az,GPS_speed,MAFiltFuel.out, MAFiltAccu.out, MAFiltBatt.out);
 	  */
-//	  sprintf(txBuffer,"\nID : %x-%x-%x-%x Ignition : %d SEL : %d CHRG : %d",
-//			  UID[0],UID[1],UID[2],UID[3], ignition_status, power_sel, charging);
-//
-//
+	  sprintf(txBuffer,"Fuel : %.2f\n",
+			  result_fuel);
 //	  HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
 //	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
     osDelay(10);
@@ -928,6 +931,10 @@ void IMU(void *argument)
 	MovAvgFilter_init(&MFiltAy);
 	MovAvgFilter_init(&MFiltAz);
 
+	MovAvgFilter_init(&MFiltGx);
+	MovAvgFilter_init(&MFiltGy);
+	MovAvgFilter_init(&MFiltGz);
+
 	osDelay(pdMS_TO_TICKS(1000));
   /* Infinite loop */
   for(;;)
@@ -946,22 +953,25 @@ void IMU(void *argument)
 	az = ((MFiltAz.out-raw_low_z)*ref_range)/(raw_high_z-raw_low_z)+ ref_low;
 
 	//Frame Transformation
-	ax = (round(((0.9982 * ax - 0.0012*ay + 0.0593*az)*100)))/100.0;
-	ay = (round(((-0.0012* ax + 0.9992*ay + 0.0395*az)*100)))/100.0;
-	az = (round(((-0.0593* ax - 0.0395*ay + 0.9975*az)*100)))/100.0;
+	ax = (round(((0.9987 * ax - 0.0007*ay + 0.0510*az)*100)))/100.0;
+	ay = (round(((-0.0007* ax + 0.9996*ay + 0.0265*az)*100)))/100.0;
+	az = (round(((-0.0510* ax - 0.0265*ay + 0.9983*az)*100)))/100.0;
 
 	//Calculate Pitch
-	roll = round((atan(-ay/sqrt(ax*ax+az*az))*180/PI))*PI/180;
+	roll = atan2(ay,az);
+//	roll = round((atan(-ay/sqrt(ax*ax+az*az))*180/PI))*PI/180;
 //	roll = round((atan(-MFiltAy.out/sqrt(MFiltAx.out*MFiltAx.out+MFiltAz.out*MFiltAz.out))*180/PI))*PI/180;
 	pitch = atan(-ax/sqrt(ay*ay+az*az));
 
-	if((roll>-(PI/18))&&(roll<(PI/18))){
-		roll = 0;
-	}
-	//choose axis
-	acc = -1*(ay + sin(roll));
+//	if((roll>-(PI/18))&&(roll<(PI/18))){
+//		acc = 1*(ay);
+//
+//	} else {
+//		//choose axis
+//		acc = 1*(ay + sin(roll));
+//	}
 
-
+	acc = ay;
 	//Calculate Speed
 	speed += acc* GRAVITY*IMU_TS *0.001 *3.6;
 
@@ -978,7 +988,7 @@ void IMU(void *argument)
 	if(speed > speed_max){
 		speed_max = speed;
 	}
-
+	float comp = sin(roll);
 	//calculate maximum acceleration
 	if(acc > acc_max){
 		acc_max = acc;
@@ -991,8 +1001,9 @@ void IMU(void *argument)
 
 //	speed = CalSpeed(MPU6050, IMU_TS);
 	memset(txBuffer,0,sizeof(txBuffer));
-	sprintf(txBuffer,"roll = %.2f ay = %.2f acc = %.2f acc_max = %.2f v = %.2f  v_avg = %.2f\n",roll *180.0/PI, ay, acc,acc_max,speed, speed_avg);
-	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
+//	sprintf(txBuffer, "roll:%.2f comp:%.3f ax:%.2f ay:%.2f\n", roll,comp,ax,ay);
+	sprintf(txBuffer,"acc = %.2f acc_avg = %.2f acc_max = %.2f speed =%.2f speed_avg = %.2f speed_max =%.2f\n",acc,acc_avg, acc_max, speed , speed_avg, speed_max);
+//	HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 100);
     osDelay(pdMS_TO_TICKS(IMU_TS));
   }
   /* USER CODE END IMU */
@@ -1008,6 +1019,7 @@ void IMU(void *argument)
 void GPS(void *argument)
 {
   /* USER CODE BEGIN GPS */
+	TickType_t tick_now,tick_prev,dtick = 0;
 	uint8_t buff[255];
 	  char buffStr[255];
 	  char nmeaSnt[80];
@@ -1042,7 +1054,7 @@ void GPS(void *argument)
 	  HAL_UART_Receive_DMA(&huart1, buff, 255);
 
 	  osDelay(pdMS_TO_TICKS(5000));
-//	  HAL_UART_Transmit(&huart2, (unsigned char *) "Start\n", 6, 500);
+	  HAL_UART_Transmit(&huart2, (unsigned char *) "Start\n", 6, 500);
   /* Infinite loop */
   for(;;)
   {
@@ -1050,7 +1062,10 @@ void GPS(void *argument)
 	  if (flag) {
 	  	memset(buffStr, 0, 255);
 	  	sprintf(buffStr, "%s", buff);
-//	  	 HAL_UART_Transmit(&huart2, (uint8_t *)buffStr, sizeof(buffStr), 70);
+
+	  	memset(txBuffer,0,sizeof(txBuffer));
+	  	sprintf(txBuffer, "GPS Available..\n");
+	  	HAL_UART_Transmit(&huart2, (uint8_t *)buffStr, strlen(buffStr), 70);
 
 
 	   /*splitting the buffStr by the "\n" delimiter with the strsep() C function
@@ -1069,7 +1084,7 @@ void GPS(void *argument)
 
 	  		// selecting only $GNGLL sentences, combined GPS and GLONAS
 	  		// on my GPS sensor this good NMEA sentence is always 50 characters
-	  		if ((strstr(nmeaSnt, "$GPGGA") != 0) && (strlen(nmeaSnt) > 49) &&(strlen(nmeaSnt) <90) && strstr(nmeaSnt, "*") != 0) {
+	  		if ((strstr(nmeaSnt, "$GNGGA") != 0) && (strlen(nmeaSnt) > 49) && strstr(nmeaSnt, "*") != 0) {
 	  			rawSum = strstr(nmeaSnt, "*");
 	  			memcpy(smNmbr, &rawSum[1], 2);
 	  			smNmbr[2] = '\0';
@@ -1160,11 +1175,6 @@ void GPS(void *argument)
 	  				memcpy(sS, &utcRaw[4], 2);
 	  				sS[2] = '\0';
 
-//	  				float latDg_f = atof(latDg)/100.0;
-//	  				float latMS_f = atof(latMS)/60.0;
-//	  				float lonDg_f = atof(lonDg)/100.0;
-//	  				float lonMS_f = atof(lonMS)/60.0;
-
 	  				strcpy(strUTC, hH);
 	  				strcat(strUTC, ":");
 	  				strcat(strUTC, mM);
@@ -1172,28 +1182,28 @@ void GPS(void *argument)
 	  				strcat(strUTC, sS);
 	  				strUTC[8] = '\0';
 
-	  				memset(txBuffer,0,sizeof(txBuffer));
-	  				sprintf(txBuffer, "GPS Available..\n");
-	  				HAL_UART_Transmit(&huart2, (unsigned char *)txBuffer, sizeof(txBuffer), 100);
+	  				tick_now = xTaskGetTickCount();
+	  				dtick = tick_now - tick_prev;
+	  				tick_prev = tick_now;
 
+	  				//Calculate Distance
+	  				GPS_distance = distance_on_geoid(prev_latitude, prev_longitude, latitude, longitude);
+	  				GPS_speed    = (double) (GPS_distance/(pdTICKSTOMS(dtick))*1000); //ms to s
+
+	  				//Update previous location
+	  				prev_latitude = latitude;
+	  				prev_longitude = longitude;
+
+	  				memset(txBuffer,0,sizeof(txBuffer));
+	  				sprintf(txBuffer, "latitude : %f longitude : %f distance : %.2f speed : %.2f\n", latitude, longitude,GPS_distance,GPS_speed);
+	  				HAL_UART_Transmit(&huart2, (unsigned char *)txBuffer, strlen(txBuffer), 100);
 	  			} //end of the chekcsum data verification
 	  		} //end of %GPPGA Sentences selection
 	  	}// end of splotting the buffstr by the "\n" delimiter with strsep() c function
 	  	flag = 0;
 
-	  	//Calculate Distance
-	  	GPS_distance = distance_on_geoid(prev_latitude, prev_longitude, latitude, longitude);
-	  	GPS_speed    = (double) (GPS_distance/GPS_TS)*1000; //ms to s
-
-	  	//Update previous location
-	  	prev_latitude = latitude;
-	  	prev_longitude = longitude;
 	  }
 	  else {
-//		  GPS_distance = 0;
-//		  latitude = 0;
-//		  longitude = 0;
-//		  GPS_speed = 0;
 		  memset(txBuffer,0,sizeof(txBuffer));
 		  sprintf(txBuffer,"GPS no signal..\n");
 		  HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer, sizeof(txBuffer), 100);
@@ -1225,10 +1235,9 @@ void RFID(void *argument)
 
 	while (status != 0x92){
 		status = Read_MFRC522(VersionReg);
-		status = 0x92;
-//		sprintf(txBuffer,"Running RC522 ver :%x\n", status);
-//		HAL_UART_Transmit(&huart2, (unsigned char*) txBuffer, sizeof(txBuffer), 5000);
-//		osDelay(pdMS_TO_TICKS(1000));
+		sprintf(txBuffer,"Running RC522 ver :%x\n", status);
+		HAL_UART_Transmit(&huart2, (unsigned char*) txBuffer, sizeof(txBuffer), 5000);
+		osDelay(pdMS_TO_TICKS(1000));
 	}
 	osMutexRelease(MutexSPI1Handle);
 	//Printing to PC
@@ -1254,7 +1263,14 @@ void RFID(void *argument)
 			  for(int i = 0; i <4 ;i++){
 				  UID[i]=cardstr[i];
 			  }
-			  sprintf(txBuffer,"UID: %x %x %x %x\n\r",(u_char)cardstr[0], (u_char)cardstr[1],(u_char)cardstr[2],(u_char)cardstr[3]);
+			  sprintf(txBuffer,"UID: %x %x %x %x ",(u_char)cardstr[0], (u_char)cardstr[1],(u_char)cardstr[2],(u_char)cardstr[3]);
+			  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
+			  memset(txBuffer,0,sizeof(txBuffer));
+			  if(UID[0]== 0x29){ // Need to add driver database
+				  sprintf(txBuffer,"Verified ..\n");
+			  } else {
+				  sprintf(txBuffer,"NOT Verified ..\n");
+			  }
 			  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
 		  }
 	  }
@@ -1266,6 +1282,7 @@ void RFID(void *argument)
 //		  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
 	  }
 	  osMutexRelease(MutexSPI1Handle);
+
     osDelay(250);
   }
   /* USER CODE END RFID */
@@ -1427,7 +1444,7 @@ void ADCProcesing(void *argument)
 
 	/* Initialize Input Value */
 	float input_fuel, input_accu, input_batt = 0;
-
+	float result_accu, result_batt = 0;
 	/* Initialize RC Filter */
 	RCFilter_Init(&rcFiltFuel, 5.0f, 100.0f);
 
@@ -1443,17 +1460,23 @@ void ADCProcesing(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	  input_accu = (value[0]/ADC_RESOLUTION) * 13;
-	  input_batt = (value[1]/ADC_RESOLUTION) * 4.2;
-	  input_fuel = (value[2]/ADC_RESOLUTION) * VOLTAGE_REFERENCE;
+	  input_accu = (value[1]/ADC_RESOLUTION)* 3.3 * 12.16/0.77;
+	  input_batt = (value[0]/ADC_RESOLUTION)* 3.3 * 7.9/2.14;
+	  input_fuel = ((value[2]/ADC_RESOLUTION)* 3.295)*1;
 
+//	  input fuel = ((floor((input_fuel*100))
 	  RCFilter_Update(&rcFiltFuel, input_fuel);
 	  MovAvgFilter_Update(&MAFiltFuel, input_fuel);
 	  MovAvgFilter_Update(&MAFiltAccu, input_accu);
 	  MovAvgFilter_Update(&MAFiltBatt, input_batt);
-//	  sprintf(txBuffer,"Raw : %.3f Filtered : %.3f\n", input, rcFiltFuel.out[0]);
-//	  HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), HAL_MAX_DELAY);
-	  osDelay(100); //100 Hz Sampling Rate
+
+	  MAFiltFuel.out = ((floor(MAFiltFuel.out*100))/100.0);
+	  result_fuel = (1-((MAFiltFuel.out-0.2)/0.8))*3.8;
+
+	  memset(txBuffer,0,sizeof(txBuffer));
+	  sprintf(txBuffer,"RawAccu:%.2f RawBatt:%.2f Accu:%.2f Batt:%.2f\n", input_accu,input_batt,MAFiltAccu.out, MAFiltBatt.out);
+	  HAL_UART_Transmit(&huart2, (unsigned char *) txBuffer, sizeof(txBuffer), 500);
+	  osDelay(pdMS_TO_TICKS(10)); //100 Hz Sampling Rate
   }
   /* USER CODE END ADCProcesing */
 }
@@ -1481,6 +1504,7 @@ void LoggingData(void *argument)
 	SIM800_SendCommand("AT+CCLK?\r\n", "OK\r\n", CMD_DELAY);
 	log_acc_avg[index] = acc_avg;
 	log_acc_max[index] = acc_max;
+	log_gyro[index] = MFiltGz.out;
 	log_speed_max[index] = speed_max;
 	log_speed_avg[index] = speed_avg;
 	log_latitude[index] = latitude;
@@ -1488,8 +1512,7 @@ void LoggingData(void *argument)
 	log_fuel[index] = MAFiltFuel.out;
 	log_accu[index] = MAFiltAccu.out;
 	log_batt[index] = MAFiltBatt.out;
-	log_ignition_status[index] = ignition_status;
-//	A9G_GetTime(log_timestamp[index]);
+	log_ignition_status[index] = 0;
 
 	memset(log_timestamp[index], 0, sizeof(log_timestamp[index]));
 	memcpy(log_timestamp[index], &timestamp[8], 20);
@@ -1497,31 +1520,29 @@ void LoggingData(void *argument)
 	log_timestamp[index][19] = '0';
 	memset(txBuffer,0,sizeof(txBuffer));
 	sprintf(txBuffer,"index : %d Timestamp: %s\n", index, log_timestamp[index]);
-	HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer , sizeof(txBuffer), 100);
+//	HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer , sizeof(txBuffer), 100);
 	//Increment Index
 	index++;
 	if(index >= LOG_LENGTH){
 
 		index = 0;
-		//Add clearing array
+		//clearing array
 		osMutexAcquire(mutexIMUHandle, portMAX_DELAY);
 		imu_index = 0;
 		speed_avg = 0;
 		speed_max = 0;
 		acc_avg = 0;
 		acc_max = 0;
-//		memset(txBuffer,0,sizeof(txBuffer));
-//		sprintf(txBuffer,"FULL! v_avg = %.2f\n", speed_avg);
-//		HAL_UART_Transmit(&huart2, (uint8_t *) txBuffer , sizeof(txBuffer), 100);
+
 		osMutexRelease(mutexIMUHandle);
 		memset(payload,0,sizeof(payload)); //clearing form
 		//Create Payload Form
-		sprintf(payload,"`{\\\"tw\\\":[\\\"%s\\\",\\\"%s\\\"],\\\"lk\\\":[\\\"%f,%f\\\",\\\"%f,%f\\\"],\\\"k_max\\\":[%.2f,%.2f],\\\"k_avg\\\":[%.2f,%.2f],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[%.2f,%.2f],\\\"a_avg\\\":[%.2f,%.2f],\\\"tb\\\":[%.2f,%.2f],\\\"ta\\\":[%.2f,%.2f],\\\"bb\\\":[%.2f,%.2f],\\\"si\\\":[%d,%d],\\\"kurir\\\":1}`",
-				log_timestamp[0], log_timestamp[1], log_latitude[0],log_longitude[0], log_latitude[1], log_longitude[1], log_speed_max[0],log_speed_max[1],log_speed_avg[0],log_speed_avg[1],log_acc_max[0],log_acc_max[1], log_acc_avg[0], log_acc_avg[1], log_batt[0], log_batt[1], log_accu[0], log_accu[1],log_fuel[0], log_fuel[1], log_ignition_status[0], log_ignition_status[1]);
+		sprintf(payload,"`{\\\"tw\\\":[\\\"%s\\\",\\\"%s\\\"],\\\"lk\\\":[\\\"%f,%f\\\",\\\"%f,%f\\\"],\\\"k_max\\\":[%.2f,%.2f],\\\"k_avg\\\":[%.2f,%.2f],\\\"k_ang\\\":[%.2f,%.2f],\\\"a_max\\\":[%.2f,%.2f],\\\"a_avg\\\":[%.2f,%.2f],\\\"tb\\\":[%.2f,%.2f],\\\"ta\\\":[%.2f,%.2f],\\\"bb\\\":[%.2f,%.2f],\\\"si\\\":[%d,%d],\\\"kurir\\\":17}`",
+				log_timestamp[0], log_timestamp[1], log_latitude[0],log_longitude[0], log_latitude[1], log_longitude[1], log_speed_max[0],log_speed_max[1],log_speed_avg[0],log_speed_avg[1],log_gyro[0], log_gyro[1],log_acc_max[0],log_acc_max[1], log_acc_avg[0], log_acc_avg[1], log_batt[0], log_batt[1], log_accu[0], log_accu[1],log_fuel[0], log_fuel[1], log_ignition_status[0], log_ignition_status[1]);
 
 
 //		sprintf(payload,"`{\\\"tw\\\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\\\":[\\\"-6.8385324382250205,107.6955557148961\\\",\\\"-6.828578043365432,107.6112333432733\\\"],\\\"k_max\\\":[43.99,55.65],\\\"k_avg\\\":[76.99,82.97],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[3.62,83.87],\\\"a_avg\\\":[91.39,62.66],\\\"tb\\\":[6.07,6.39],\\\"ta\\\":[5.10,1.99],\\\"bb\\\":[0.92,0.98],\\\"si\\\":[0,1],\\\"kurir\\\":1}`");
-		xTaskNotifyGive(SendDataTaskHandle);
+//		xTaskNotifyGive(SendDataTaskHandle);
 	}
 
 //	HAL_UART_Transmit(&huart2, (uint8_t*)payload, sizeof(payload), 100);
@@ -1577,9 +1598,8 @@ void SendData(void *argument)
 		HAL_UART_Transmit(&huart2, (uint8_t*) txBuffer, sizeof(txBuffer), 100);
 	}
 	osDelay(pdMS_TO_TICKS(1000));
-//	memset(payload,0,sizeof(payload));
-//	sprintf(payload,"`{\\\"tw\\\":[\\\"2021-05-26T07:47:21.810Z\\\",\\\"2021-05-26T07:47:21.916Z\\\"],\\\"lk\\\":[\\\"-6.8385324382250205,107.6955557148961\\\",\\\"-6.828578043365432,107.6112333432733\\\"],\\\"k_max\\\":[43.99,55.65],\\\"k_avg\\\":[76.99,82.97],\\\"k_ang\\\":[13.24,2.99],\\\"a_max\\\":[3.62,83.87],\\\"a_avg\\\":[91.39,62.66],\\\"tb\\\":[6.07,6.39],\\\"ta\\\":[5.10,1.99],\\\"bb\\\":[0.92,0.98],\\\"si\\\":[0,1],\\\"kurir\\\":1}`");
-  /* Infinite loop */
+
+	/* Infinite loop */
   for(;;)
   {
 	  //Blocking Until Notified
@@ -1589,7 +1609,7 @@ void SendData(void *argument)
 	  pub_status = MQTT_Pub(topic, payload);
 	  memset(txBuffer, 0, sizeof(txBuffer));
 	  sprintf(txBuffer,"Sending : %d\n", pub_status);
-	  HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
+//	  HAL_UART_Transmit(&huart2, (uint8_t*)txBuffer, sizeof(txBuffer), 100);
 	  if(pub_status!=0){
 		  //Sending Fail
 		  queue++;

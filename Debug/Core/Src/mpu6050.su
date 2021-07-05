@@ -1,4 +1,5 @@
 mpu6050.c:69:9:MPU6050_Init	40	static
-mpu6050.c:109:9:MPU6060_Read_Offset	40	static
-mpu6050.c:123:6:MPU6050_Read_Accel	40	static
-mpu6050.c:145:7:CalSpeed	40	static
+mpu6050.c:127:9:MPU6060_Read_Offset	40	static
+mpu6050.c:141:6:MPU6050_Read_Accel	40	static
+mpu6050.c:163:7:CalSpeed	40	static
+mpu6050.c:175:6:MPU6050_Read_Gyro	40	static
